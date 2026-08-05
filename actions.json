@@ -1,0 +1,23 @@
+{
+  "job": "AUTOMATION_Trigger_Workflow",
+  "description": "Automation workflow. Every action runs this same Jenkins job with a different action_name.",
+  "output_marker": "job_output:",
+  "parameters": [
+    { "name": "customer_name", "required": true, "description": "Customer identifier" },
+    { "name": "ipaddress", "required": true, "description": "Device IP address" },
+    { "name": "hostname", "required": true, "description": "Device hostname" },
+    { "name": "username", "required": true, "description": "Login user for the target device" },
+    { "name": "device_type", "required": true, "description": "Device type, e.g. cisco_ios" }
+  ],
+  "actions": {
+    "fetchos": {
+      "description": "Fetch the operating system version running on the device."
+    },
+    "fetchtop": {
+      "description": "Fetch the top process / resource usage snapshot from the device."
+    },
+    "fetchcpu": {
+      "description": "Fetch current CPU utilisation for the device."
+    }
+  }
+}
