@@ -262,22 +262,125 @@ docker run -i --rm -e MCP_TRANSPORT=stdio --env-file .env dittops/jenkins-mcp:0.
 ## Kubernetes
 
 `charts/jenkins-mcp` deploys the HTTP transport, with the action registry in a
-ConfigMap and the Jenkins credentials in a Secret:
+ConfigMap and the Jenkins credentials in a Secret. The steps below install into
+a `jenkins-mcp` namespace.
+
+### 1. Push the image
+
+The cluster has to be able to pull it, so a locally built image is not enough:
+
+```bash
+docker build -t dittops/jenkins-mcp:0.1.0 .
+docker push dittops/jenkins-mcp:0.1.0
+```
+
+For a private registry, add `--set imagePullSecrets[0].name=regcred` at install
+time and create that pull secret in the namespace.
+
+### 2. Create the namespace and the credentials Secret
+
+Keep the credentials out of the Helm release. Values passed with `--set` are
+stored in the release secret and land in your shell history; a Secret you create
+separately does not:
+
+```bash
+kubectl create namespace jenkins-mcp
+
+kubectl -n jenkins-mcp create secret generic jenkins-creds \
+  --from-literal=JENKINS_USER='jenkins-bot' \
+  --from-literal=JENKINS_API_TOKEN='<api-token>' \
+  --from-literal=JENKINS_BUILD_TOKEN='<build-token>'
+```
+
+Use a Jenkins **API token**, not an account password. Omit
+`JENKINS_BUILD_TOKEN` if the job has no remote-trigger token — the chart treats
+that key as optional.
+
+The three key names are what the chart reads by default. To reuse a Secret that
+names them differently, point the chart at its keys instead of renaming
+anything:
+
+```bash
+--set jenkins.auth.userKey=username \
+--set jenkins.auth.apiTokenKey=api_token \
+--set jenkins.auth.buildTokenKey=build_token
+```
+
+To rotate a credential later, update the Secret and restart the pods — the
+values are read into the environment at startup:
+
+```bash
+kubectl -n jenkins-mcp create secret generic jenkins-creds \
+  --from-literal=JENKINS_USER='jenkins-bot' \
+  --from-literal=JENKINS_API_TOKEN='<new-token>' \
+  --from-literal=JENKINS_BUILD_TOKEN='<build-token>' \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n jenkins-mcp rollout restart deploy/jenkins-mcp
+```
+
+### 3. Install the chart
 
 ```bash
 helm upgrade --install jenkins-mcp charts/jenkins-mcp \
-  --namespace mcp --create-namespace \
+  --namespace jenkins-mcp \
   --set jenkins.url=http://jenkins.example.com:8080 \
   --set jenkins.auth.existingSecret=jenkins-creds
 ```
 
-Clients then use `http://jenkins-mcp.mcp.svc.cluster.local:8000/mcp`. Adding an
-action is a values edit plus `helm upgrade`, and the pods restart on the change.
-Chart values, the `existingSecret` layout, and the scaling and network caveats
-are in [`charts/jenkins-mcp/README.md`](charts/jenkins-mcp/README.md) — the
-short version is that the Service stays `ClusterIP`, the Ingress stays off
-unless something in front of it authenticates, and `replicaCount` stays at 1
-because streamable-http sessions are held in one pod's memory.
+Add `--dry-run=server` to validate against the live API without installing. The
+chart refuses to render without `jenkins.url` and a credential source, so a
+half-configured release fails here rather than in CrashLoopBackOff.
+
+Without a pre-made Secret, the chart will render one from values instead:
+
+```bash
+--set jenkins.auth.user=jenkins-bot \
+--set jenkins.auth.apiToken='<api-token>' \
+--set jenkins.auth.buildToken='<build-token>'
+```
+
+### 4. Verify
+
+```bash
+kubectl -n jenkins-mcp rollout status deploy/jenkins-mcp
+kubectl -n jenkins-mcp logs deploy/jenkins-mcp
+
+kubectl -n jenkins-mcp port-forward svc/jenkins-mcp 8000:8000 &
+.venv/bin/python examples/client_example.py --url http://127.0.0.1:8000/mcp
+```
+
+That lists the tools and calls the read-only `list_jenkins_actions`, which
+exercises config loading and the registry without starting a build. Use the
+venv's Python: the client needs mcp ≥2.0.0, and a system-wide older mcp fails
+with `too many values to unpack`.
+
+In-cluster clients need no port-forward:
+
+```json
+{
+  "mcpServers": {
+    "jenkins": {
+      "type": "http",
+      "url": "http://jenkins-mcp.jenkins-mcp.svc.cluster.local:8000/mcp"
+    }
+  }
+}
+```
+
+### Afterwards
+
+Adding an action is a values edit plus `helm upgrade`, and the pods restart on
+the change. Chart values, the `existingSecret` layout, and the scaling and
+network caveats are in
+[`charts/jenkins-mcp/README.md`](charts/jenkins-mcp/README.md) — the short
+version is that the Service stays `ClusterIP`, the Ingress stays off unless
+something in front of it authenticates, and `replicaCount` stays at 1 because
+streamable-http sessions are held in one pod's memory.
+
+```bash
+helm rollback jenkins-mcp -n jenkins-mcp      # previous revision
+helm uninstall jenkins-mcp -n jenkins-mcp     # leaves jenkins-creds in place
+```
 
 ## Setup
 

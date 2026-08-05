@@ -8,7 +8,7 @@ MCP clients connect to at
 
 ```bash
 helm upgrade --install jenkins-mcp charts/jenkins-mcp \
-  --namespace mcp --create-namespace \
+  --namespace jenkins-mcp --create-namespace \
   --set jenkins.url=http://jenkins.example.com:8080 \
   --set jenkins.auth.user=jenkins-bot \
   --set jenkins.auth.apiToken=<api-token> \
@@ -19,15 +19,18 @@ Better, once a Secret is managed out of band — nothing sensitive then passes
 through `--set` (where it lands in shell history and the Helm release):
 
 ```bash
-kubectl -n mcp create secret generic jenkins-creds \
+kubectl -n jenkins-mcp create secret generic jenkins-creds \
   --from-literal=JENKINS_USER=jenkins-bot \
   --from-literal=JENKINS_API_TOKEN=… \
   --from-literal=JENKINS_BUILD_TOKEN=…
 
-helm upgrade --install jenkins-mcp charts/jenkins-mcp -n mcp \
+helm upgrade --install jenkins-mcp charts/jenkins-mcp -n jenkins-mcp \
   --set jenkins.url=http://jenkins.example.com:8080 \
   --set jenkins.auth.existingSecret=jenkins-creds
 ```
+
+Step-by-step cluster install, including creating the namespace and the Secret,
+is in the [project README](../../README.md#kubernetes).
 
 The chart refuses to render without `jenkins.url` and a credential source, so a
 half-configured release fails at `helm template` rather than in CrashLoopBackOff.
@@ -121,8 +124,8 @@ server as failing.
 ## Verify a release
 
 ```bash
-kubectl -n mcp port-forward svc/jenkins-mcp 8000:8000
-python examples/client_example.py --url http://127.0.0.1:8000/mcp
+kubectl -n jenkins-mcp port-forward svc/jenkins-mcp 8000:8000
+.venv/bin/python examples/client_example.py --url http://127.0.0.1:8000/mcp
 ```
 
 That lists the tools and calls the read-only `list_jenkins_actions`, which
