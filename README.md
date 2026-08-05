@@ -234,6 +234,51 @@ default for that reason.
   in front of it and firewall the port to known clients. Plain HTTP would also
   put the traffic on the wire in cleartext.
 
+## Container image
+
+```bash
+docker build -t dittops/jenkins-mcp:0.1.0 .
+docker run --rm -p 8000:8000 \
+  -e JENKINS_URL=http://jenkins.example.com:8080 \
+  -e JENKINS_USER=jenkins-bot \
+  -e JENKINS_API_TOKEN=… \
+  -e JENKINS_BUILD_TOKEN=… \
+  dittops/jenkins-mcp:0.1.0
+```
+
+The image defaults to `streamable-http` on `0.0.0.0:8000/mcp` — a container is
+reached over the network, and the local `127.0.0.1` default would be
+unreachable from outside the container. It runs as uid 10001 and works with a
+read-only root filesystem (`--read-only --tmpfs /tmp`). `actions.json` is baked
+in at `/app/actions.json`; mount over it, or point `JENKINS_ACTIONS_CONFIG`
+elsewhere, to change the registry without rebuilding.
+
+For a stdio client that spawns the container itself:
+
+```bash
+docker run -i --rm -e MCP_TRANSPORT=stdio --env-file .env dittops/jenkins-mcp:0.1.0
+```
+
+## Kubernetes
+
+`charts/jenkins-mcp` deploys the HTTP transport, with the action registry in a
+ConfigMap and the Jenkins credentials in a Secret:
+
+```bash
+helm upgrade --install jenkins-mcp charts/jenkins-mcp \
+  --namespace mcp --create-namespace \
+  --set jenkins.url=http://jenkins.example.com:8080 \
+  --set jenkins.auth.existingSecret=jenkins-creds
+```
+
+Clients then use `http://jenkins-mcp.mcp.svc.cluster.local:8000/mcp`. Adding an
+action is a values edit plus `helm upgrade`, and the pods restart on the change.
+Chart values, the `existingSecret` layout, and the scaling and network caveats
+are in [`charts/jenkins-mcp/README.md`](charts/jenkins-mcp/README.md) — the
+short version is that the Service stays `ClusterIP`, the Ingress stays off
+unless something in front of it authenticates, and `replicaCount` stays at 1
+because streamable-http sessions are held in one pod's memory.
+
 ## Setup
 
 ```bash

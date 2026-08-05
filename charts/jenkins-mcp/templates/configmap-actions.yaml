@@ -1,0 +1,11 @@
+{{- if not .Values.existingActionsConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "jenkins-mcp.actionsConfigMapName" . }}
+  labels:
+    {{- include "jenkins-mcp.labels" . | nindent 4 }}
+data:
+  actions.json: |
+    {{- include "jenkins-mcp.actionsJson" . | nindent 4 }}
+{{- end }}

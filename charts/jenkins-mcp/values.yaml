@@ -1,0 +1,214 @@
+########################################################################
+# IMAGE
+########################################################################
+image:
+  repository: dittops/jenkins-mcp
+  # Defaults to .Chart.AppVersion. Pin an immutable tag in production.
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []            # e.g. ["regcred"] for a private registry
+nameOverride: ""
+fullnameOverride: ""
+
+########################################################################
+# WORKLOAD
+########################################################################
+# Keep this at 1 unless the clients in front of you hold a stable connection
+# to one pod. streamable-http sessions live in the memory of the pod that
+# created them, so a second replica will 404 requests that land on the wrong
+# one. If you do scale up, also set service.sessionAffinity: ClientIP (and an
+# ingress affinity annotation, if traffic arrives through one).
+replicaCount: 1
+
+# Long-running builds are polled from inside the pod, so give a draining pod
+# time to finish the wait it is in the middle of.
+terminationGracePeriodSeconds: 60
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true  # /tmp is supplied as an emptyDir
+  capabilities:
+    drop: ["ALL"]
+
+# The MCP endpoint rejects a bare GET (it wants MCP session/Accept headers), so
+# a TCP connect is the meaningful liveness signal. Override `probes.*.httpGet`
+# only if you front the container with something that exposes real health.
+probes:
+  liveness:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+########################################################################
+# SERVICE
+########################################################################
+service:
+  type: ClusterIP
+  port: 8000
+  annotations: {}
+  # Set to ClientIP if you ever run replicaCount > 1 (see the note above).
+  sessionAffinity: ""
+
+########################################################################
+# MCP TRANSPORT
+########################################################################
+mcp:
+  transport: streamable-http    # streamable-http | sse
+  host: 0.0.0.0                 # must be 0.0.0.0 in a pod to be reachable
+  port: 8000                    # container port
+  path: /mcp                    # clients connect to http://<host>:<port><path>
+
+########################################################################
+# JENKINS CONNECTION
+########################################################################
+jenkins:
+  url: ""                       # required, e.g. http://jenkins.example.com:8080
+  verifySsl: true
+  trustEnv: false               # true honours HTTP(S)_PROXY env vars
+  timeoutSeconds: 600           # hard cap on any single wait
+  pollInterval: 2
+  pollMaxInterval: 10
+  consoleTailLines: 200
+
+  auth:
+    # Recommended: reference a Secret you manage out of band (sealed-secrets,
+    # external-secrets, vault). When set, nothing sensitive lives in values.
+    existingSecret: ""
+
+    # Key names inside the Secret — chart-managed or existing.
+    userKey: JENKINS_USER
+    apiTokenKey: JENKINS_API_TOKEN
+    buildTokenKey: JENKINS_BUILD_TOKEN
+
+    # Env var the app reads the remote-build token from. Change only if the
+    # action registry sets a different "build_token_env".
+    buildTokenEnvVar: JENKINS_BUILD_TOKEN
+
+    # Used only when existingSecret is empty — the chart then renders a Secret
+    # from these. Pass them with --set / a private values file, never in git.
+    user: ""
+    apiToken: ""
+    buildToken: ""              # optional; omit if the job needs no token
+
+########################################################################
+# ACTION REGISTRY (rendered to actions.json in a ConfigMap)
+########################################################################
+# This is also the allowlist: an action that is not listed here cannot be
+# triggered. Adding one is a values edit plus `helm upgrade` — no rebuild.
+actions:
+  job: AUTOMATION_Trigger_Workflow
+  description: Automation workflow. Every action runs this same Jenkins job with a different action_name.
+  output_marker: "job_output:"
+  # Set true for jobs printing block output (JSON, tables) after the marker.
+  output_multiline: false
+  parameters:
+    - name: customer_name
+      required: true
+      description: Customer identifier
+    - name: ipaddress
+      required: true
+      description: Device IP address
+    - name: hostname
+      required: true
+      description: Device hostname
+    - name: username
+      required: true
+      description: Login user for the target device
+    - name: device_type
+      required: true
+      description: Device type, e.g. cisco_ios
+  actions:
+    fetchos:
+      description: Fetch the operating system version running on the device.
+    fetchtop:
+      description: Fetch the top process / resource usage snapshot from the device.
+    fetchcpu:
+      description: Fetch current CPU utilisation for the device.
+
+# Use a ConfigMap you manage yourself instead of the `actions` block above.
+# It must contain an "actions.json" key.
+existingActionsConfigMap: ""
+
+########################################################################
+# INGRESS
+########################################################################
+# Off by default, and it should stay off unless the ingress in front of it
+# authenticates. This server has no auth of its own: anyone who reaches the URL
+# can trigger Jenkins jobs against your network devices. Terminate TLS and
+# require auth at the proxy (oauth2-proxy, an auth-url annotation, mTLS).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: jenkins-mcp.example.com
+      paths:
+        - path: /mcp
+          pathType: Prefix
+  tls: []
+
+########################################################################
+# NETWORK POLICY
+########################################################################
+# Recommended when the cluster supports it: restricts who may reach the
+# unauthenticated MCP port. With `from` empty, all ingress to the pod is denied.
+networkPolicy:
+  enabled: false
+  from: []
+  # from:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: agents
+  #     podSelector:
+  #       matchLabels:
+  #         app.kubernetes.io/name: my-agent
+
+########################################################################
+# EXTRAS
+########################################################################
+extraEnv: []                    # [{name: SSL_CERT_FILE, value: /certs/ca.pem}]
+extraEnvFrom: []                # [{secretRef: {name: extra-secrets}}]
+
+# Mount a private CA here if Jenkins uses one, then point SSL_CERT_FILE at it
+# via extraEnv rather than turning verifySsl off.
+extraVolumes: []
+extraVolumeMounts: []
