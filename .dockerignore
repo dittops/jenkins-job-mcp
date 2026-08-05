@@ -1,0 +1,20 @@
+# Never let real credentials into an image layer.
+.env
+script.py
+
+.git
+.gitignore
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+.claude/
+charts/
+examples/
+tests/
+Dockerfile
+.dockerignore

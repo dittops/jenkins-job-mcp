@@ -1,0 +1,12 @@
+apiVersion: v2
+name: jenkins-mcp
+description: MCP server that triggers a Jenkins automation job and returns its result
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - mcp
+  - jenkins
+  - automation
+sources:
+  - https://github.com/dittops/jenkins-job-mcp

@@ -1,0 +1,41 @@
+{{ include "jenkins-mcp.fullname" . }} is deployed.
+
+In-cluster URL for MCP clients:
+
+  http://{{ include "jenkins-mcp.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}{{ .Values.mcp.path }}
+
+Try it from your machine:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "jenkins-mcp.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  python examples/client_example.py --url http://127.0.0.1:{{ .Values.service.port }}{{ .Values.mcp.path }}
+
+Client config:
+
+  {"mcpServers": {"jenkins": {"type": "http", "url": "http://<host>:{{ .Values.service.port }}{{ .Values.mcp.path }}"}}}
+
+Actions exposed ({{ len .Values.actions.actions }}): {{ keys .Values.actions.actions | sortAlpha | join ", " }}
+Jenkins job: {{ .Values.actions.job }} at {{ .Values.jenkins.url }}
+
+SECURITY: this server has no authentication. Anyone who can reach that URL can
+trigger Jenkins jobs against your network devices.
+{{- if .Values.ingress.enabled }}
+
+  !! ingress.enabled=true — the endpoint is published at
+     {{- range .Values.ingress.hosts }} {{ .host }}{{ end }}.
+     Make sure the ingress terminates TLS and authenticates callers
+     (oauth2-proxy, an auth-url annotation, mTLS). Otherwise, disable it and
+     reach the service through port-forward or in-cluster DNS instead.
+{{- end }}
+{{- if not .Values.networkPolicy.enabled }}
+
+  Consider networkPolicy.enabled=true to limit which pods may connect.
+{{- end }}
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- if not .Values.service.sessionAffinity }}
+
+  !! replicaCount={{ .Values.replicaCount }} with no service.sessionAffinity set.
+     MCP streamable-http sessions are held in the memory of the pod that
+     created them, so requests routed to another pod will fail. Set
+     service.sessionAffinity=ClientIP, or go back to a single replica.
+{{- end }}
+{{- end }}

@@ -1,0 +1,165 @@
+{{- include "jenkins-mcp.validate" . }}
+{{- $auth := .Values.jenkins.auth }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "jenkins-mcp.fullname" . }}
+  labels:
+    {{- include "jenkins-mcp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "jenkins-mcp.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      annotations:
+        {{- if not .Values.existingActionsConfigMap }}
+        checksum/actions: {{ include "jenkins-mcp.actionsJson" . | sha256sum }}
+        {{- end }}
+        {{- if not $auth.existingSecret }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "jenkins-mcp.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "jenkins-mcp.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcp.port }}
+              protocol: TCP
+          env:
+            - name: MCP_TRANSPORT
+              value: {{ .Values.mcp.transport | quote }}
+            - name: MCP_HOST
+              value: {{ .Values.mcp.host | quote }}
+            - name: MCP_PORT
+              value: {{ .Values.mcp.port | quote }}
+            - name: MCP_PATH
+              value: {{ .Values.mcp.path | quote }}
+            - name: JENKINS_URL
+              value: {{ .Values.jenkins.url | quote }}
+            - name: JENKINS_ACTIONS_CONFIG
+              value: /config/actions.json
+            - name: JENKINS_VERIFY_SSL
+              value: {{ .Values.jenkins.verifySsl | quote }}
+            - name: JENKINS_TRUST_ENV
+              value: {{ .Values.jenkins.trustEnv | quote }}
+            - name: JENKINS_TIMEOUT_SECONDS
+              value: {{ .Values.jenkins.timeoutSeconds | quote }}
+            - name: JENKINS_POLL_INTERVAL
+              value: {{ .Values.jenkins.pollInterval | quote }}
+            - name: JENKINS_POLL_MAX_INTERVAL
+              value: {{ .Values.jenkins.pollMaxInterval | quote }}
+            - name: JENKINS_CONSOLE_TAIL_LINES
+              value: {{ .Values.jenkins.consoleTailLines | quote }}
+            - name: JENKINS_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "jenkins-mcp.secretName" . }}
+                  key: {{ $auth.userKey }}
+            - name: JENKINS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "jenkins-mcp.secretName" . }}
+                  key: {{ $auth.apiTokenKey }}
+            # Optional: some jobs have no remote-trigger token configured.
+            - name: {{ $auth.buildTokenEnvVar }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "jenkins-mcp.secretName" . }}
+                  key: {{ $auth.buildTokenKey }}
+                  optional: true
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: actions
+              mountPath: /config
+              readOnly: true
+            # The root filesystem is read-only; give Python somewhere to write.
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: actions
+          configMap:
+            name: {{ include "jenkins-mcp.actionsConfigMapName" . }}
+            items:
+              - key: actions.json
+                path: actions.json
+        - name: tmp
+          emptyDir: {}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
