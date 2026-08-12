@@ -55,7 +55,7 @@ precedence, so the `env` block in your MCP client config overrides the file.
 | `JENKINS_TRUST_ENV` | `false` ignores proxy env vars (default) |
 | `JENKINS_TIMEOUT_SECONDS` | Hard cap on any wait, default `600` |
 | `JENKINS_POLL_INTERVAL` / `JENKINS_POLL_MAX_INTERVAL` | Backoff bounds |
-| `JENKINS_CONSOLE_TAIL_LINES` | Console lines returned, default `200` |
+| `JENKINS_CONSOLE_TAIL_LINES` | Console lines returned, default `0` (no limit) |
 
 ### `actions.json`
 
@@ -93,7 +93,7 @@ Adding an action is a one-line edit — no code change. Notes:
 | `list_jenkins_actions()` | Discover actions and their required parameters |
 | `run_jenkins_action(action, parameters, wait=true, timeout_seconds=None)` | Trigger and return the result |
 | `get_jenkins_build(build_number=None, queue_url=None, wait=false, timeout_seconds=None)` | Status/result of a build |
-| `get_jenkins_console(build_number, tail_lines_count=200)` | Raw console for debugging |
+| `get_jenkins_console(build_number, tail_lines_count=0)` | Raw console for debugging; `0` returns all of it |
 
 `wait=false` returns as soon as a build number exists, so a long build does not
 blow past the MCP client's request timeout; poll `get_jenkins_build` afterwards.
@@ -149,7 +149,10 @@ nc -z -G 5 jenkins.example.com 8080 && echo reachable || echo unreachable
   the chosen action cannot be spoofed past the allowlist.
 - **Credential redaction** — userinfo and query strings are stripped from every
   URL returned or embedded in an error.
-- **Console truncation** — default 200 lines, to bound context usage.
+- **Console truncation** — off by default; the full log is returned. Set
+  `JENKINS_CONSOLE_TAIL_LINES` (or `tail_lines_count`) to a positive number to
+  bound context usage. Note that an unbounded log is downloaded whole into
+  memory and may be truncated by the MCP client instead.
 - Console output is untrusted device data; the tool descriptions tell the model
   not to follow instructions found inside it.
 

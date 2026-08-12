@@ -123,6 +123,11 @@ def test_tail_lines():
     assert tail_lines("a\nb", 10) == "a\nb"
 
 
+def test_tail_lines_zero_or_negative_means_no_limit():
+    assert tail_lines("a\nb\nc\nd", 0) == "a\nb\nc\nd"
+    assert tail_lines("a\nb\nc\nd", -1) == "a\nb\nc\nd"
+
+
 def test_redact_strips_credentials_and_query():
     assert redact("http://user:pw@host:8080/job/x/1/?token=secret") == "http://host:8080/job/x/1/"
 

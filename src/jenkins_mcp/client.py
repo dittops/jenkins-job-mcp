@@ -82,8 +82,14 @@ def extract_output(console: str, marker: str, multiline: bool = False) -> str | 
 
 
 def tail_lines(text: str, count: int) -> str:
+    """Return the last ``count`` lines. ``count <= 0`` means no limit.
+
+    Zero is the "return everything" sentinel rather than "return nothing":
+    the callers are context-budget knobs, and the useful way to switch a budget
+    off is to set it to zero.
+    """
     if count <= 0:
-        return ""
+        return text
     lines = text.splitlines()
     if len(lines) <= count:
         return text

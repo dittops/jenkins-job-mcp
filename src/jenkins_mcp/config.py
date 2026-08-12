@@ -168,7 +168,8 @@ class Settings:
     timeout_seconds: int = 600
     poll_interval: int = 2
     poll_max_interval: int = 10
-    console_tail_lines: int = 200
+    # 0 = no truncation; the full console is returned. See tail_lines().
+    console_tail_lines: int = 0
 
     @property
     def auth(self) -> tuple[str, str]:
@@ -305,5 +306,5 @@ def load_settings() -> Settings:
         timeout_seconds=_env_int("JENKINS_TIMEOUT_SECONDS", 600),
         poll_interval=_env_int("JENKINS_POLL_INTERVAL", 2),
         poll_max_interval=_env_int("JENKINS_POLL_MAX_INTERVAL", 10),
-        console_tail_lines=_env_int("JENKINS_CONSOLE_TAIL_LINES", 200),
+        console_tail_lines=_env_int("JENKINS_CONSOLE_TAIL_LINES", 0),
     )
