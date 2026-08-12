@@ -30,7 +30,6 @@ from itsm_mcp.errors import (
     ItsmConnectionError,
     ParameterError,
     TicketNotFound,
-    UnknownGroupError,
 )
 
 POLICY = {
@@ -109,11 +108,11 @@ def ok_response(request: httpx.Request) -> httpx.Response:
 # --- policy ---------------------------------------------------------------
 
 
-def test_group_allowlist_rejects_unlisted(tmp_path):
+def test_unlisted_group_passes_through_verbatim(tmp_path):
+    """The configured list is a hint, not a gate — ITSM decides what exists."""
     policy = write_policy(tmp_path)
-    with pytest.raises(UnknownGroupError) as exc:
-        policy.group("Payroll")
-    assert "ICCM Tools" in str(exc.value)
+    assert policy.group("ICCM Database").name == "ICCM Database"
+    assert policy.group("Payroll").name == "Payroll"
 
 
 def test_group_match_is_case_insensitive_but_sends_configured_spelling(tmp_path):
@@ -122,9 +121,12 @@ def test_group_match_is_case_insensitive_but_sends_configured_spelling(tmp_path)
     assert policy.group("  NETWORK OPS ").name == "Network Ops"
 
 
-def test_empty_allowlist_permits_any_group():
+def test_unconfigured_policy_accepts_any_group():
     assert Policy().group("Anything").name == "Anything"
-    assert Policy().restricts_groups is False
+
+
+def test_unlisted_group_keeps_the_caller_s_spelling(tmp_path):
+    assert write_policy(tmp_path).group("  iccm database  ").name == "iccm database"
 
 
 def test_blank_group_is_rejected(tmp_path):
@@ -254,7 +256,7 @@ def test_missing_policy_defaults_to_unrestricted(tmp_path, monkeypatch):
     monkeypatch.setenv("ITSM_URL", "https://itsm.test/")
     monkeypatch.setenv("ITSM_AUTHTOKEN", "t")
     cfg = load_settings()
-    assert cfg.policy.restricts_groups is False
+    assert cfg.policy.groups == ()
     assert cfg.base_url == "https://itsm.test"  # trailing slash trimmed
     assert cfg.portal_id == "1"
 
@@ -465,7 +467,6 @@ def test_list_groups_reports_the_allowlist_and_policy(tmp_path, monkeypatch):
     result = server.list_itsm_groups()
     assert result["ok"] is True
     assert [g["name"] for g in result["groups"]] == ["ICCM Tools", "Network Ops"]
-    assert result["groups_restricted"] is True
     assert result["note_policy"]["max_length"] == 100
     assert result["itsm_url"] == "https://itsm.test"
 
@@ -523,12 +524,35 @@ async def test_bad_request_ids_are_refused_before_any_write(bad, tmp_path, monke
     assert result["error_type"] == "ParameterError"
 
 
-async def test_unknown_group_is_a_structured_error(tmp_path, monkeypatch):
+async def test_unlisted_group_is_forwarded_to_itsm(tmp_path, monkeypatch):
+    """Groups the policy has never heard of must still reach the wire."""
+    seen: dict = {}
+
+    def handler(request):
+        seen["body"] = json.loads(parse_qs(request.content.decode())["input_data"][0])
+        return ok_response(request)
+
     cfg = make_settings(write_policy(tmp_path))
-    bind(monkeypatch, cfg)
-    result = await server.update_itsm_ticket(request_id=1, group="Payroll")
+    bind(monkeypatch, cfg, make_client(cfg, handler))
+
+    result = await server.update_itsm_ticket(request_id=1, group="ICCM Database")
+
+    assert result["ok"] is True
+    assert result["applied"]["group"] == "ICCM Database"
+    assert seen["body"]["request"]["group"] == {"name": "ICCM Database"}
+
+
+async def test_blank_group_is_still_refused(tmp_path, monkeypatch):
+    """Dropping the allowlist does not mean sending a malformed assignment."""
+
+    def handler(request):  # pragma: no cover - must never be reached
+        raise AssertionError("a write was attempted with a blank group")
+
+    cfg = make_settings(write_policy(tmp_path))
+    bind(monkeypatch, cfg, make_client(cfg, handler))
+    result = await server.update_itsm_ticket(request_id=1, group="   ")
     assert result["ok"] is False
-    assert result["error_type"] == "UnknownGroupError"
+    assert result["error_type"] == "ParameterError"
 
 
 async def test_api_failure_is_returned_not_raised(tmp_path, monkeypatch):

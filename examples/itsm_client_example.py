@@ -96,11 +96,9 @@ async def run(args: argparse.Namespace) -> int:
             return 1
 
         print(f"  itsm: {policy['itsm_url']}")
-        if policy["groups_restricted"]:
-            for group in policy["groups"]:
-                print(f"\n  - {group['name']}: {group['description']}")
-        else:
-            print("\n  (no group allowlist configured — any group name is accepted)")
+        for group in policy["groups"]:
+            print(f"\n  - {group['name']}: {group['description']}")
+        print("\n  (any group name is accepted; ITSM validates it)")
 
         notes = policy["note_policy"]
         print(f"\n  note defaults : {notes['defaults']}")

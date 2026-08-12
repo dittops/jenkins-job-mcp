@@ -18,20 +18,16 @@ ITSM instance: {{ .Values.itsm.url }} (portal {{ .Values.itsm.portalId }})
 Write policy: from ConfigMap {{ .Values.existingPolicyConfigMap }}
 {{- else if .Values.policy.groups }}
 {{- /* groups accept both the object form and the bare-string shorthand */}}
-Groups assignable ({{ len .Values.policy.groups }}): {{ range $i, $g := .Values.policy.groups }}{{ if $i }}, {{ end }}{{ if kindIs "string" $g }}{{ $g }}{{ else }}{{ $g.name }}{{ end }}{{ end }}
+Groups suggested ({{ len .Values.policy.groups }}): {{ range $i, $g := .Values.policy.groups }}{{ if $i }}, {{ end }}{{ if kindIs "string" $g }}{{ $g }}{{ else }}{{ $g.name }}{{ end }}{{ end }}
+  (a hint only — any group name is accepted, and ITSM validates it)
 {{- else }}
-Groups assignable: unrestricted
+Groups suggested: none listed; any group name is accepted
 {{- end }}
 
 SECURITY: this server has no authentication, and it WRITES to your ticketing
 system. Anyone who can reach that URL can reassign tickets and post notes on
 them under the authtoken's technician account.
 {{- if not .Values.existingPolicyConfigMap }}
-{{- if not .Values.policy.groups }}
-
-  !! policy.groups is empty, so ANY group name may be assigned. Populate it —
-     the list is the allowlist.
-{{- end }}
 {{- with .Values.policy.notes }}
 {{- if .defaults }}
 

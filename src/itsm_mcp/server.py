@@ -80,10 +80,11 @@ def _request_id(value: Any) -> int:
 
 @mcp.tool()
 def list_itsm_groups() -> dict[str, Any]:
-    """List the support groups a ticket may be assigned to, and the note policy.
+    """List the commonly used support groups, and the note policy.
 
-    Call this first if you are unsure which group name to use. The listed
-    groups are an allowlist — a group that is not listed cannot be assigned.
+    Call this first if you are unsure which group name to use. The list is a
+    convenience, not a restriction: `update_itsm_ticket` accepts any group
+    name, and ITSM rejects one that does not exist there.
     """
     try:
         cfg = settings()
@@ -106,9 +107,10 @@ async def update_itsm_ticket(
 ) -> dict[str, Any]:
     """Assign a group to an ITSM ticket and/or append a note to it.
 
-    Supply at least one of `group` (a name from `list_itsm_groups`) and `note`.
-    Only these two fields are ever written; status, priority and requester
-    cannot be changed through this tool.
+    Supply at least one of `group` and `note`. `group` may be any group name
+    that exists in ITSM — `list_itsm_groups` lists the common ones, but is not
+    a restriction. Only these two fields are ever written; status, priority and
+    requester cannot be changed through this tool.
 
     The note flags default to the configured policy, which normally makes the
     note visible to the requester and copies it onto every linked ticket. Pass

@@ -8,10 +8,11 @@ Two MCP servers, built and deployed from one repo:
 | **itsm-mcp** | `itsm-mcp` | Updates an ITSM ticket: assigns a group, appends a note |
 
 They share nothing at runtime — separate processes, separate credentials,
-separate config files — but share the same conventions: a JSON file that is
-also the allowlist, typed errors returned as tool results rather than raised,
-and one `MCP_TRANSPORT` switch for stdio vs HTTP. Most of this README covers
-the Jenkins server; see [ITSM server](#itsm-server-itsm-mcp) for the other one.
+separate config files — but share the same conventions: a JSON file declaring
+what the server may do, typed errors returned as tool results rather than
+raised, and one `MCP_TRANSPORT` switch for stdio vs HTTP. Most of this README
+covers the Jenkins server; see [ITSM server](#itsm-server-itsm-mcp) for the
+other one.
 
 ## jenkins-mcp
 
@@ -480,23 +481,24 @@ the write surface to those two fields.
 
 | Tool | Purpose |
 |---|---|
-| `list_itsm_groups` | The groups that may be assigned, plus the note policy. Call first. |
+| `list_itsm_groups` | Commonly used groups, plus the note policy. Call first. |
 | `update_itsm_ticket` | Assign a group and/or append a note to one ticket. |
 
 `update_itsm_ticket(request_id, group=None, note=None, show_to_requester=None,
 mark_first_response=None, add_to_linked_requests=None)` — at least one of
-`group` / `note` is required. Group names match case-insensitively but are sent
-in their configured spelling, so "iccm tools" assigns `ICCM Tools`.
+`group` / `note` is required. Any group name is accepted; a name matching the
+configured list is sent in that list's spelling, so "iccm tools" assigns
+`ICCM Tools`, and anything else goes through verbatim.
 
 ### `itsm.json`
 
-The write policy, and the allowlist: a group not listed here cannot be
-assigned. Point at it with `ITSM_CONFIG`.
+The write policy. Point at it with `ITSM_CONFIG`.
 
 ```json
 {
   "groups": [
-    { "name": "ICCM Tools", "description": "ICCM tooling and automation queue." }
+    { "name": "ICCM Tools", "description": "ICCM tooling and automation queue." },
+    { "name": "ICCM Database", "description": "ICCM database queue." }
   ],
   "notes": {
     "max_length": 5000,
@@ -513,9 +515,11 @@ assigned. Point at it with `ITSM_CONFIG`.
 }
 ```
 
-`groups` may also use the shorthand `["ICCM Tools", "Network Ops"]`. An empty
-or absent `groups` list means group names are not restricted — fine for a local
-stdio experiment, not for a deployment.
+`groups` is a **hint, not an allowlist**. Any group name is accepted and
+forwarded; ITSM is the authority on which groups exist and rejects one that
+does not. Listing a group here gives the model something to discover and fixes
+its spelling. The shorthand `["ICCM Tools", "Network Ops"]` works too, and an
+empty or absent list is fine — nothing is restricted either way.
 
 `defaults` are what applies when the model says nothing; `allowed` is a hard
 gate an operator can close, independent of the defaults.

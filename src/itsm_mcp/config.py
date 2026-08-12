@@ -6,8 +6,11 @@ requester, technician, whatever. This server therefore never forwards a
 caller-supplied blob: ``client.build_update_payload`` assembles ``input_data``
 itself from typed arguments, and this module is what bounds those arguments.
 
-The ``groups`` list is the allowlist, mirroring how the Jenkins server's action
-registry works: a group that is not listed cannot be assigned.
+``groups`` is *not* an allowlist. Any group name is accepted and forwarded:
+ITSM is the authority on which groups exist, and keeping a second list here
+only produced a staler copy that rejected valid groups. The list survives as
+canonical spellings, so a name that matches one is sent the way it is written
+here.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .errors import ConfigError, ParameterError, UnknownGroupError
+from .errors import ConfigError, ParameterError
 
 DEFAULT_PORTAL_ID = "1"
 
@@ -45,7 +48,7 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class GroupConfig:
-    """One support group a ticket may be assigned to."""
+    """One support group, as a hint to the caller and a canonical spelling."""
 
     name: str
     description: str = ""
@@ -82,34 +85,23 @@ class Policy:
     groups: tuple[GroupConfig, ...] = ()
     notes: NotePolicy = field(default_factory=NotePolicy)
 
-    @property
-    def restricts_groups(self) -> bool:
-        return bool(self.groups)
-
     def group(self, name: str) -> GroupConfig:
-        """Resolve a group name to its configured entry.
+        """Resolve a group name, canonicalising it against the configured list.
 
-        Matching is case-insensitive and the *configured* spelling is what gets
-        sent, so a model that says "iccm tools" still assigns "ICCM Tools". An
-        empty allowlist means the policy does not restrict groups, and the name
-        passes through as supplied.
+        Not a gate: any non-empty name is accepted and forwarded to ITSM, which
+        is the authority on which groups exist and will reject one that does
+        not. Matching is case-insensitive and a hit is sent in its *configured*
+        spelling, so "iccm tools" assigns "ICCM Tools"; anything else is sent
+        exactly as supplied.
         """
         wanted = (name or "").strip()
         if not wanted:
             raise ParameterError("group must be a non-empty group name.")
 
-        if not self.groups:
-            return GroupConfig(name=wanted)
-
         for group in self.groups:
             if group.name.lower() == wanted.lower():
                 return group
-
-        known = ", ".join(g.name for g in self.groups)
-        raise UnknownGroupError(
-            f"Group '{wanted}' is not allowed. Configured groups: {known}. "
-            f"Add it to the ITSM policy file if this assignment is intended."
-        )
+        return GroupConfig(name=wanted)
 
     def validate_note(self, note: str) -> str:
         text = (note or "").strip()
@@ -166,7 +158,6 @@ class Policy:
             "groups": [
                 {"name": g.name, "description": g.description} for g in self.groups
             ],
-            "groups_restricted": self.restricts_groups,
             "note_policy": {
                 "max_length": self.notes.max_length,
                 "defaults": {
@@ -225,7 +216,7 @@ def _parse_groups(raw: object) -> tuple[GroupConfig, ...]:
 
         if not entry.name.strip():
             raise ConfigError("group names cannot be empty")
-        # A duplicate would make the allowlist ambiguous about which spelling wins.
+        # A duplicate would make it ambiguous which spelling is canonical.
         if entry.name.lower() in seen:
             raise ConfigError(f"group '{entry.name}' is listed more than once")
         seen.add(entry.name.lower())

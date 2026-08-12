@@ -13,10 +13,6 @@ class ConfigError(ItsmMCPError):
     """Environment or policy file is missing/invalid."""
 
 
-class UnknownGroupError(ItsmMCPError):
-    """Requested group is not in the policy's allowlist."""
-
-
 class ParameterError(ItsmMCPError):
     """Supplied arguments do not describe a valid update."""
 

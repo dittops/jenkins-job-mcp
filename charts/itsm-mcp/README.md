@@ -53,7 +53,7 @@ half-configured release fails at `helm template` rather than in CrashLoopBackOff
 | `itsm.auth.existingSecret` | `""` | Secret carrying the authtoken; when empty the chart renders one from `itsm.auth.authtoken` |
 | `itsm.auth.authtokenKey` | `ITSM_AUTHTOKEN` | Key name inside that Secret |
 | `itsm.verifySsl`, `itsm.timeoutSeconds`, `itsm.trustEnv` | `true` / `30` / `false` | Client behaviour |
-| `policy` | one group, notes internal-only | Rendered to `itsm.json` in a ConfigMap |
+| `policy` | two suggested groups, notes customer-visible | Rendered to `itsm.json` in a ConfigMap |
 | `existingPolicyConfigMap` | `""` | Use your own ConfigMap (key `itsm.json`) instead |
 | `mcp.transport` / `mcp.port` / `mcp.path` | `streamable-http` / `8000` / `/mcp` | Transport wiring; `stdio` is rejected — there would be no port to serve |
 | `ingress.enabled` | `false` | Read [Security](#security) first |
@@ -88,8 +88,10 @@ deployment carries a checksum annotation over the rendered JSON, so
 
 Two things this list is doing:
 
-- **`groups` is the allowlist.** A group not listed here cannot be assigned. An
-  empty list means *unrestricted*, which the chart warns about on install.
+- **`groups` is a hint, not a gate.** Any group name is accepted and forwarded;
+  ITSM decides what exists. Listing one gives the model something to discover
+  and fixes its spelling, so a caller saying "iccm tools" assigns `ICCM Tools`.
+  An empty list changes nothing about what is accepted.
 - **`allowed` is a hard gate**, `defaults` only sets what applies when the
   caller says nothing. `show_to_requester` publishes a note to the customer and
   `add_to_linked_requests` copies it onto every linked ticket — both default to
