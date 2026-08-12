@@ -55,17 +55,22 @@ class GroupConfig:
 class NotePolicy:
     """Bounds on the note this server may append to a ticket.
 
-    The two ``allow_*`` switches gate the flags whose blast radius reaches
-    beyond the one ticket: ``show_to_requester`` publishes the note to the
-    customer, and ``add_to_linked_requests`` copies it onto every linked
-    ticket. Both default to permitted but *off*, so reaching a customer is
-    always a deliberate argument rather than a default the model inherits.
+    ``show_to_requester`` publishes the note to the customer and
+    ``add_to_linked_requests`` copies it onto every linked ticket. Both are on
+    by default, matching how this deployment's technicians write notes: the
+    normal case is a customer-visible update that propagates across the linked
+    set, and an internal-only note is the exception a caller asks for with
+    ``show_to_requester=false``.
+
+    The two ``allow_*`` switches are the hard gates, independent of the
+    defaults: setting one false makes that flag unreachable no matter what a
+    caller passes.
     """
 
     max_length: int = DEFAULT_MAX_NOTE_LENGTH
-    default_show_to_requester: bool = False
+    default_show_to_requester: bool = True
     default_mark_first_response: bool = False
-    default_add_to_linked_requests: bool = False
+    default_add_to_linked_requests: bool = True
     allow_show_to_requester: bool = True
     allow_add_to_linked_requests: bool = True
 
@@ -247,19 +252,45 @@ def _parse_notes(raw: object) -> NotePolicy:
     if max_length < 1:
         raise ConfigError("'notes.max_length' must be at least 1")
 
-    def flag(source: dict, key: str, default: bool) -> bool:
+    def flag(source: dict, block: str, key: str, default: bool) -> bool:
         value = source.get(key, default)
         if not isinstance(value, bool):
-            raise ConfigError(f"'{key}' must be true or false, got {value!r}")
+            raise ConfigError(
+                f"'notes.{block}.{key}' must be true or false, got {value!r}"
+            )
         return value
+
+    def gated(key: str, fallback: bool) -> tuple[bool, bool]:
+        """Resolve one flag's (default, allowed) pair.
+
+        The default falls back to whatever is *allowed* rather than to a fixed
+        value, so closing a gate without touching `defaults` turns the flag off
+        instead of leaving a default the gate then rejects on every call.
+        Spelling out both, contradictorily, is a config error rather than a
+        server that fails every note it is asked to write.
+        """
+        permitted = flag(allowed, "allowed", key, fallback)
+        applied = flag(defaults, "defaults", key, permitted)
+        if applied and not permitted:
+            raise ConfigError(
+                f"'notes.defaults.{key}' is true but 'notes.allowed.{key}' is "
+                f"false, so every note would be rejected. Set the default to "
+                f"false, or open the gate."
+            )
+        return applied, permitted
+
+    show_default, show_allowed = gated("show_to_requester", True)
+    linked_default, linked_allowed = gated("add_to_linked_requests", True)
 
     return NotePolicy(
         max_length=max_length,
-        default_show_to_requester=flag(defaults, "show_to_requester", False),
-        default_mark_first_response=flag(defaults, "mark_first_response", False),
-        default_add_to_linked_requests=flag(defaults, "add_to_linked_requests", False),
-        allow_show_to_requester=flag(allowed, "show_to_requester", True),
-        allow_add_to_linked_requests=flag(allowed, "add_to_linked_requests", True),
+        default_show_to_requester=show_default,
+        default_mark_first_response=flag(
+            defaults, "defaults", "mark_first_response", False
+        ),
+        default_add_to_linked_requests=linked_default,
+        allow_show_to_requester=show_allowed,
+        allow_add_to_linked_requests=linked_allowed,
     )
 
 

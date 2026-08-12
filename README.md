@@ -501,9 +501,9 @@ assigned. Point at it with `ITSM_CONFIG`.
   "notes": {
     "max_length": 5000,
     "defaults": {
-      "show_to_requester": false,
+      "show_to_requester": true,
       "mark_first_response": false,
-      "add_to_linked_requests": false
+      "add_to_linked_requests": true
     },
     "allowed": {
       "show_to_requester": true,
@@ -518,11 +518,20 @@ or absent `groups` list means group names are not restricted — fine for a loca
 stdio experiment, not for a deployment.
 
 `defaults` are what applies when the model says nothing; `allowed` is a hard
-gate an operator can close. The two that matter are `show_to_requester`, which
-publishes the note to the customer, and `add_to_linked_requests`, which copies
-it onto every linked ticket — both default to **off**, so reaching anyone
-outside the ticket is always a deliberate argument rather than an inherited
-default.
+gate an operator can close, independent of the defaults.
+
+`show_to_requester` publishes the note to the customer and
+`add_to_linked_requests` copies it onto every linked ticket. Both default to
+**on**: the normal case here is a customer-visible update that propagates
+across the linked set, and an internal-only note is what a caller asks for
+explicitly with `show_to_requester=false`. `mark_first_response` stays off by
+default, since claiming the SLA first response is rarely what an automated
+note should do.
+
+Closing a gate without touching `defaults` turns that flag off rather than
+leaving a default the gate would reject; spelling out both contradictorily
+(`defaults.X: true` with `allowed.X: false`) is refused at startup instead of
+failing every note at call time.
 
 ### Configuration
 

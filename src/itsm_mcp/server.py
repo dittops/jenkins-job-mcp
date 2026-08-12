@@ -110,10 +110,11 @@ async def update_itsm_ticket(
     Only these two fields are ever written; status, priority and requester
     cannot be changed through this tool.
 
-    The note flags default to the configured policy — normally all false, i.e.
-    an internal note. Pass `show_to_requester=true` only when the text is meant
-    for the customer, and `add_to_linked_requests=true` only when it should be
-    copied onto every linked ticket as well.
+    The note flags default to the configured policy, which normally makes the
+    note visible to the requester and copies it onto every linked ticket. Pass
+    `show_to_requester=false` when the text is internal and the customer should
+    not see it, and `add_to_linked_requests=false` to confine it to this one
+    ticket. `list_itsm_groups` reports the defaults actually in force.
 
     This writes to a live ticketing system as soon as it is called and there is
     no undo. `note` is stored as HTML by ServiceDesk Plus, so prefer plain text.

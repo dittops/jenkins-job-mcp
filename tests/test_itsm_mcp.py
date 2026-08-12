@@ -40,7 +40,12 @@ POLICY = {
     ],
     "notes": {
         "max_length": 100,
-        "defaults": {"show_to_requester": False},
+        # Explicitly all-off, so fixture-based tests also prove a policy file
+        "defaults": {
+            "show_to_requester": False,
+            "mark_first_response": False,
+            "add_to_linked_requests": False,
+        },
         "allowed": {"show_to_requester": True, "add_to_linked_requests": True},
     },
 }
@@ -49,6 +54,14 @@ ALL_OFF = {
     "show_to_requester": False,
     "mark_first_response": False,
     "add_to_linked_requests": False,
+}
+
+# What an unconfigured policy applies: customer-visible and propagated to
+# linked tickets, but not claiming the SLA first-response.
+STOCK_DEFAULTS = {
+    "show_to_requester": True,
+    "mark_first_response": False,
+    "add_to_linked_requests": True,
 }
 
 
@@ -129,8 +142,12 @@ def test_note_must_be_non_empty_and_within_limit(tmp_path):
     assert "100" in str(exc.value)
 
 
-def test_note_flags_default_to_internal_only():
-    assert Policy().resolve_note_flags(None, None, None) == ALL_OFF
+def test_note_flags_default_to_customer_visible_and_propagated():
+    assert Policy().resolve_note_flags(None, None, None) == STOCK_DEFAULTS
+
+
+def test_policy_file_overrides_the_stock_defaults(tmp_path):
+    assert write_policy(tmp_path).resolve_note_flags(None, None, None) == ALL_OFF
 
 
 def test_note_flags_honour_explicit_values():
@@ -143,24 +160,67 @@ def test_note_flags_honour_explicit_values():
 
 
 def test_policy_can_forbid_customer_visible_notes():
-    policy = Policy(notes=NotePolicy(allow_show_to_requester=False))
+    policy = Policy(
+        notes=NotePolicy(
+            allow_show_to_requester=False, default_show_to_requester=False
+        )
+    )
     with pytest.raises(ParameterError) as exc:
         policy.resolve_note_flags(True, None, None)
     assert "show_to_requester" in str(exc.value)
 
 
 def test_policy_can_forbid_linked_request_fanout():
-    policy = Policy(notes=NotePolicy(allow_add_to_linked_requests=False))
+    policy = Policy(
+        notes=NotePolicy(
+            allow_add_to_linked_requests=False, default_add_to_linked_requests=False
+        )
+    )
     with pytest.raises(ParameterError):
         policy.resolve_note_flags(None, None, True)
 
 
 def test_configured_default_applies_when_caller_is_silent():
-    policy = Policy(notes=NotePolicy(default_show_to_requester=True))
-    assert policy.resolve_note_flags(None, None, None)["show_to_requester"] is True
+    policy = Policy(notes=NotePolicy(default_show_to_requester=False))
+    assert policy.resolve_note_flags(None, None, None)["show_to_requester"] is False
+
+
+def test_caller_can_make_a_note_internal():
+    assert Policy().resolve_note_flags(False, None, False) == ALL_OFF
 
 
 # --- policy file parsing --------------------------------------------------
+
+
+def test_omitted_notes_block_uses_the_stock_defaults(tmp_path):
+    policy = write_policy(tmp_path, {"groups": ["Ops"]})
+    assert policy.resolve_note_flags(None, None, None) == STOCK_DEFAULTS
+
+
+def test_closing_a_gate_also_turns_its_default_off(tmp_path):
+    """Otherwise the default would be one the gate rejects on every call."""
+    policy = write_policy(
+        tmp_path, {"notes": {"allowed": {"show_to_requester": False}}}
+    )
+    flags = policy.resolve_note_flags(None, None, None)
+    assert flags["show_to_requester"] is False
+    assert flags["add_to_linked_requests"] is True  # untouched gate stays open
+    with pytest.raises(ParameterError):
+        policy.resolve_note_flags(True, None, None)
+
+
+def test_a_default_its_gate_forbids_is_a_config_error(tmp_path):
+    with pytest.raises(ConfigError) as exc:
+        write_policy(
+            tmp_path,
+            {
+                "notes": {
+                    "defaults": {"show_to_requester": True},
+                    "allowed": {"show_to_requester": False},
+                }
+            },
+        )
+    assert "every note would be rejected" in str(exc.value)
 
 
 def test_duplicate_group_is_a_config_error(tmp_path):

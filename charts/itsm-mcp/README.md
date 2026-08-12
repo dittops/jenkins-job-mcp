@@ -74,9 +74,9 @@ policy:
   notes:
     max_length: 5000
     defaults:
-      show_to_requester: false
+      show_to_requester: true
       mark_first_response: false
-      add_to_linked_requests: false
+      add_to_linked_requests: true
     allowed:
       show_to_requester: true
       add_to_linked_requests: true
@@ -92,8 +92,11 @@ Two things this list is doing:
   empty list means *unrestricted*, which the chart warns about on install.
 - **`allowed` is a hard gate**, `defaults` only sets what applies when the
   caller says nothing. `show_to_requester` publishes a note to the customer and
-  `add_to_linked_requests` copies it onto every linked ticket — set either to
-  `false` under `allowed` and no caller can turn it on.
+  `add_to_linked_requests` copies it onto every linked ticket — both default to
+  `true`, so a note is customer-visible and propagates unless the caller passes
+  `false`. Set either to `false` under `allowed` and no caller can turn it on;
+  the matching default then drops to `false` too, and spelling out the
+  contradiction (`defaults` true, `allowed` false) is refused at startup.
 
 ## Security
 

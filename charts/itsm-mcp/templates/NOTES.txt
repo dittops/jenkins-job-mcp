@@ -33,11 +33,16 @@ them under the authtoken's technician account.
      the list is the allowlist.
 {{- end }}
 {{- with .Values.policy.notes }}
-{{- if and .defaults .defaults.show_to_requester }}
+{{- if .defaults }}
 
-  !! policy.notes.defaults.show_to_requester=true — every note this server
-     writes is published to the requester by default. Set it to false and let
-     callers opt in per note.
+  Note defaults, applied whenever a caller does not say otherwise:
+    visible to requester   : {{ .defaults.show_to_requester }}
+    copied to linked tickets: {{ .defaults.add_to_linked_requests }}
+    marks first response   : {{ .defaults.mark_first_response }}
+{{- if .defaults.show_to_requester }}
+  A note therefore reaches the customer unless the caller passes
+  show_to_requester=false.
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}
