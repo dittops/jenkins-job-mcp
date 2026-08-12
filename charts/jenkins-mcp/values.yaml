@@ -4,7 +4,7 @@
 image:
   repository: dittops/jenkins-mcp
   # Defaults to .Chart.AppVersion. Pin an immutable tag in production.
-  tag: "0.1.0"
+  tag: "0.1.2"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []            # e.g. ["regcred"] for a private registry
@@ -107,7 +107,9 @@ jenkins:
   timeoutSeconds: 600           # hard cap on any single wait
   pollInterval: 2
   pollMaxInterval: 10
-  consoleTailLines: 200
+  # 0 returns the full console. A positive number keeps only that many trailing
+  # lines, which bounds what a huge build log costs the model in context.
+  consoleTailLines: 0
 
   auth:
     # Recommended: reference a Secret you manage out of band (sealed-secrets,
