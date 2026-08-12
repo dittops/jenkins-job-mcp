@@ -1,11 +1,15 @@
 ########################################################################
 # IMAGE
 ########################################################################
+# Built from Dockerfile.itsm; its ENTRYPOINT is already `itsm-mcp`.
 image:
-  repository: dittops/jenkins-mcp
+  repository: dittops/itsm-mcp
   # Defaults to .Chart.AppVersion. Pin an immutable tag in production.
-  tag: "0.1.2"
+  tag: "0.1.0"
   pullPolicy: IfNotPresent
+  # Empty means "use the image's own ENTRYPOINT", which is what you want.
+  # Only set this to run a different entry point out of the same image.
+  command: []
 
 imagePullSecrets: []            # e.g. ["regcred"] for a private registry
 nameOverride: ""
@@ -21,9 +25,9 @@ fullnameOverride: ""
 # ingress affinity annotation, if traffic arrives through one).
 replicaCount: 1
 
-# Long-running builds are polled from inside the pod, so give a draining pod
-# time to finish the wait it is in the middle of.
-terminationGracePeriodSeconds: 60
+# Shorter than the Jenkins chart's: an ITSM call is a single bounded PUT, not
+# a poll loop waiting on a build, so a draining pod has little to finish.
+terminationGracePeriodSeconds: 30
 
 resources:
   requests:
@@ -56,8 +60,7 @@ securityContext:
     drop: ["ALL"]
 
 # The MCP endpoint rejects a bare GET (it wants MCP session/Accept headers), so
-# a TCP connect is the meaningful liveness signal. Override `probes.*.httpGet`
-# only if you front the container with something that exposes real health.
+# a TCP connect is the meaningful liveness signal.
 probes:
   liveness:
     enabled: true
@@ -98,91 +101,75 @@ mcp:
   path: /mcp                    # clients connect to http://<host>:<port><path>
 
 ########################################################################
-# JENKINS CONNECTION
+# ITSM CONNECTION
 ########################################################################
-jenkins:
-  url: ""                       # required, e.g. http://jenkins.example.com:8080
-  verifySsl: true
+itsm:
+  url: ""                       # required, e.g. https://10.10.146.120
+  portalId: "1"                 # sent as the PORTALID header
+  verifySsl: true               # see the TLS note below
   trustEnv: false               # true honours HTTP(S)_PROXY env vars
-  timeoutSeconds: 600           # hard cap on any single wait
-  pollInterval: 2
-  pollMaxInterval: 10
-  # 0 returns the full console. A positive number keeps only that many trailing
-  # lines, which bounds what a huge build log costs the model in context.
-  consoleTailLines: 0
+  timeoutSeconds: 30
 
   auth:
     # Recommended: reference a Secret you manage out of band (sealed-secrets,
     # external-secrets, vault). When set, nothing sensitive lives in values.
     existingSecret: ""
 
-    # Key names inside the Secret — chart-managed or existing.
-    userKey: JENKINS_USER
-    apiTokenKey: JENKINS_API_TOKEN
-    buildTokenKey: JENKINS_BUILD_TOKEN
-
-    # Env var the app reads the remote-build token from. Change only if the
-    # action registry sets a different "build_token_env".
-    buildTokenEnvVar: JENKINS_BUILD_TOKEN
+    # Key name inside the Secret — chart-managed or existing.
+    authtokenKey: ITSM_AUTHTOKEN
 
     # Used only when existingSecret is empty — the chart then renders a Secret
-    # from these. Pass them with --set / a private values file, never in git.
-    user: ""
-    apiToken: ""
-    buildToken: ""              # optional; omit if the job needs no token
+    # from this. Pass it with --set / a private values file, never in git.
+    authtoken: ""
+
+# An instance addressed by IP normally presents a cert that fails hostname
+# verification. Prefer mounting your internal CA (extraVolumes below) and
+# pointing SSL_CERT_FILE at it via extraEnv over setting verifySsl: false —
+# the authtoken is a bearer credential sent on every request.
 
 ########################################################################
-# ACTION REGISTRY (rendered to actions.json in a ConfigMap)
+# WRITE POLICY (rendered to itsm.json in a ConfigMap)
 ########################################################################
-# This is also the allowlist: an action that is not listed here cannot be
-# triggered. Adding one is a values edit plus `helm upgrade` — no rebuild.
-actions:
-  job: ICCM_AUTO_AI_Trigger_Workflow
-  description: Automation workflow. Every action runs this same Jenkins job with a different action_name.
-  output_marker: "job_output:"
-  # Set true for jobs printing block output (JSON, tables) after the marker.
-  output_multiline: false
-  parameters:
-    - name: customer_name
-      required: true
-      description: Customer identifier
-    - name: ipaddress
-      required: true
-      description: Device IP address
-    - name: hostname
-      required: true
-      description: Device hostname
-    - name: username
-      required: true
-      description: Login user for the target device
-    - name: device_type
-      required: true
-      description: Device type, e.g. cisco_ios
-  actions:
-    fetchos:
-      description: Fetch the operating system version running on the device.
-    rhel_7_to_9_perf:
-      description: Fetch CPU, Memory and Disk utilisation for RHEL 7 to 9 devices.
-    aix_perf:
-      description: Fetch CPU, Memory and Disk utilisation for AIX devices.
+# This is also the allowlist: a group that is not listed here cannot be
+# assigned. Adding one is a values edit plus `helm upgrade` — no rebuild.
+#
+# An empty `groups` list means group names are NOT restricted. That is fine for
+# a local experiment and a bad idea in a cluster.
+policy:
+  groups:
+    - name: ICCM Tools
+      description: ICCM tooling and automation queue.
+  notes:
+    max_length: 5000
+    # What applies when the caller says nothing. Both of the flags that reach
+    # beyond the single ticket are off here on purpose.
+    defaults:
+      show_to_requester: false
+      mark_first_response: false
+      add_to_linked_requests: false
+    # Hard gates. Set show_to_requester: false to make it impossible for this
+    # server to publish a note to the requester, whatever the model asks for.
+    allowed:
+      show_to_requester: true
+      add_to_linked_requests: true
 
-# Use a ConfigMap you manage yourself instead of the `actions` block above.
-# It must contain an "actions.json" key.
-existingActionsConfigMap: ""
+# Use a ConfigMap you manage yourself instead of the `policy` block above.
+# It must contain an "itsm.json" key.
+existingPolicyConfigMap: ""
 
 ########################################################################
 # INGRESS
 ########################################################################
 # Off by default, and it should stay off unless the ingress in front of it
 # authenticates. This server has no auth of its own: anyone who reaches the URL
-# can trigger Jenkins jobs against your network devices. Terminate TLS and
-# require auth at the proxy (oauth2-proxy, an auth-url annotation, mTLS).
+# can reassign and comment on your tickets. Terminate TLS and require auth at
+# the proxy (oauth2-proxy, an auth-url annotation, mTLS).
 ingress:
   enabled: false
   className: ""
   annotations: {}
   hosts:
-    - host: jenkins-mcp.example.com
+    - host: itsm-mcp.example.com
       paths:
         - path: /mcp
           pathType: Prefix
@@ -210,7 +197,7 @@ networkPolicy:
 extraEnv: []                    # [{name: SSL_CERT_FILE, value: /certs/ca.pem}]
 extraEnvFrom: []                # [{secretRef: {name: extra-secrets}}]
 
-# Mount a private CA here if Jenkins uses one, then point SSL_CERT_FILE at it
-# via extraEnv rather than turning verifySsl off.
+# Mount your internal CA here, then point SSL_CERT_FILE at it via extraEnv
+# rather than turning verifySsl off.
 extraVolumes: []
 extraVolumeMounts: []

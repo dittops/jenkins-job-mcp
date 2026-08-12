@@ -1,6 +1,19 @@
 # jenkins-mcp
 
-An MCP server that triggers a Jenkins automation job and returns its result.
+Two MCP servers, built and deployed from one repo:
+
+| Server | Entry point | What it does |
+|---|---|---|
+| **jenkins-mcp** | `jenkins-mcp` | Triggers a Jenkins automation job and returns its result |
+| **itsm-mcp** | `itsm-mcp` | Updates an ITSM ticket: assigns a group, appends a note |
+
+They share nothing at runtime — separate processes, separate credentials,
+separate config files — but share the same conventions: a JSON file that is
+also the allowlist, typed errors returned as tool results rather than raised,
+and one `MCP_TRANSPORT` switch for stdio vs HTTP. Most of this README covers
+the Jenkins server; see [ITSM server](#itsm-server-itsm-mcp) for the other one.
+
+## jenkins-mcp
 
 A single Jenkins job dispatches on its `action_name` build parameter, so the
 server exposes a registry of **actions** (`fetchos`, `fetchtop`, `fetchcpu`, …)
@@ -12,31 +25,45 @@ change.
 1. `POST /job/<job>/buildWithParameters?token=…` → Jenkins returns a queue URL
 2. Poll the queue item until it is assigned a build number
 3. Poll the build until `building == false`
-4. Read `consoleText` and extract everything after the `job_output:` marker
+4. Read `consoleText` and extract the value the job declared at its
+   `job_output:` marker
 
 Every wait is bounded by a deadline, every response is status-checked, and
 polling backs off 2s → 10s.
 
 ## Result extraction
 
-Jobs are expected to print a line like:
+Jobs declare their result in one of two shapes, both matched by the same
+`output_marker`:
 
 ```
-job_output: 17.9.4a
+job_output: 17.9.4a                  # bare marker line
+{'job_output': "RedHat-8"}           # printed dict (Python repr or JSON)
 ```
 
-The **rest of that line** becomes the tool's `output` field. Capture stops at the
-newline: a real console interleaves Jenkins' own epilogue (`Build step ... marked
-build as`, `Archiving artifacts`, `[Pipeline] // stage`) between the job's output
-and `Finished:`, and consuming past the newline would swallow it. Matching is
-case-insensitive and the **last** marker wins, so a rerun reports its final
-answer. If no marker is present, `output` is `null` and the response says so,
-with `console_tail` for context.
+For the **bare** form the rest of that line becomes the tool's `output` field.
+Capture stops at the newline: a real console interleaves Jenkins' own epilogue
+(`Build step ... marked build as`, `Archiving artifacts`, `[Pipeline] // stage`)
+between the job's output and `Finished:`, and consuming past the newline would
+swallow it.
 
-For jobs that print block output (pretty-printed JSON, a table), set
-`"output_multiline": true` in the registry. Capture then continues past the first
-newline, stopping at a blank line, at a Jenkins-looking line, or at the next
-marker.
+For the **dict** form the marker's value is parsed out and unquoted, so
+`{'job_output': "RedHat-8"}` yields `RedHat-8` — not the raw fragment. Both quote
+styles work, other keys in the dict are ignored, and log prefixes or trailing
+text on the same line (`… INFO {'job_output': "RedHat-8"} took 3.2s`) are
+excluded, since capture is bounded by the dict's own braces. A nested value comes
+back as JSON for the caller to re-parse. Parsing is literal-only
+(`ast.literal_eval`, then `json.loads`) — nothing in the console is executed.
+
+Matching is case-insensitive and the **last** marker wins, so a rerun reports its
+final answer. If no marker is present, `output` is `null` and the response says
+so, with `console_tail` for context.
+
+For jobs that print block output (pretty-printed JSON, a table) after a bare
+marker, set `"output_multiline": true` in the registry. Capture then continues
+past the first newline, stopping at a blank line, at a Jenkins-looking line, or
+at the next marker. The dict form needs no such flag — it is already delimited
+by its braces, spanning as many lines as it likes.
 
 ## Configuration
 
@@ -159,7 +186,9 @@ nc -z -G 5 jenkins.example.com 8080 && echo reachable || echo unreachable
 ## Example client
 
 `examples/client_example.py` lists the tools and calls one. It works against
-either transport and is the quickest way to check a deployment.
+either transport and is the quickest way to check a deployment. The ITSM server
+has its own, [`examples/itsm_client_example.py`](examples/itsm_client_example.py),
+which takes the same `--url` flag.
 
 ```bash
 .venv/bin/python examples/client_example.py
@@ -262,11 +291,24 @@ For a stdio client that spawns the container itself:
 docker run -i --rm -e MCP_TRANSPORT=stdio --env-file .env dittops/jenkins-mcp:0.1.0
 ```
 
+The ITSM server has its own image, built from `Dockerfile.itsm` out of the same
+source tree. Same defaults, with `itsm.json` baked in at `/app/itsm.json`:
+
+```bash
+docker build -f Dockerfile.itsm -t dittops/itsm-mcp:0.1.0 .
+docker run --rm -p 8001:8000 \
+  -e ITSM_URL=https://10.10.146.120 \
+  -e ITSM_AUTHTOKEN=… \
+  dittops/itsm-mcp:0.1.0
+```
+
 ## Kubernetes
 
-`charts/jenkins-mcp` deploys the HTTP transport, with the action registry in a
-ConfigMap and the Jenkins credentials in a Secret. The steps below install into
-a `jenkins-mcp` namespace.
+Two servers, two charts, two images. `charts/jenkins-mcp` deploys the HTTP
+transport with the action registry in a ConfigMap and the Jenkins credentials
+in a Secret; the steps below install it into a `jenkins-mcp` namespace.
+[`charts/itsm-mcp`](charts/itsm-mcp/README.md) is the same shape for the ITSM
+server — see [Deploying itsm-mcp](#deploying-itsm-mcp).
 
 ### 1. Push the image
 
@@ -385,11 +427,192 @@ helm rollback jenkins-mcp -n jenkins-mcp      # previous revision
 helm uninstall jenkins-mcp -n jenkins-mcp     # leaves jenkins-creds in place
 ```
 
+### Deploying itsm-mcp
+
+Its own image, release, namespace and Secret. The image shares this source tree
+but is built from `Dockerfile.itsm`, so the two servers version and roll back
+independently:
+
+```bash
+docker build -f Dockerfile.itsm -t dittops/itsm-mcp:0.1.0 .
+docker push dittops/itsm-mcp:0.1.0
+```
+
+```bash
+kubectl create namespace itsm-mcp
+
+kubectl -n itsm-mcp create secret generic itsm-creds \
+  --from-literal=ITSM_AUTHTOKEN='…'
+
+helm upgrade --install itsm-mcp charts/itsm-mcp \
+  --namespace itsm-mcp \
+  --set itsm.url=https://10.10.146.120 \
+  --set itsm.auth.existingSecret=itsm-creds
+```
+
+Verify it the same way, with the read-only tool:
+
+```bash
+kubectl -n itsm-mcp port-forward svc/itsm-mcp 8000:8000
+.venv/bin/python examples/itsm_client_example.py --url http://127.0.0.1:8000/mcp
+```
+
+Values, the write policy, and the security caveats are in
+[`charts/itsm-mcp/README.md`](charts/itsm-mcp/README.md). The one that differs
+from the Jenkins chart: this server *writes*, so scope the authtoken to a
+technician who may only reassign groups and add notes.
+
+## ITSM server (itsm-mcp)
+
+Wraps `PUT /api/v3/requests/{id}` on ManageEngine ServiceDesk Plus. Two things
+can be written — the assigned **group** and an appended **note** — and nothing
+else.
+
+### Why it is not a generic API wrapper
+
+The v3 API takes its whole payload as one `input_data` JSON string, so anything
+that reaches that blob lands on the ticket: status, priority, requester,
+technician. This server never forwards a caller-supplied blob. `input_data` is
+assembled in `build_update_payload` from typed arguments, which is what bounds
+the write surface to those two fields.
+
+### Tools
+
+| Tool | Purpose |
+|---|---|
+| `list_itsm_groups` | The groups that may be assigned, plus the note policy. Call first. |
+| `update_itsm_ticket` | Assign a group and/or append a note to one ticket. |
+
+`update_itsm_ticket(request_id, group=None, note=None, show_to_requester=None,
+mark_first_response=None, add_to_linked_requests=None)` — at least one of
+`group` / `note` is required. Group names match case-insensitively but are sent
+in their configured spelling, so "iccm tools" assigns `ICCM Tools`.
+
+### `itsm.json`
+
+The write policy, and the allowlist: a group not listed here cannot be
+assigned. Point at it with `ITSM_CONFIG`.
+
+```json
+{
+  "groups": [
+    { "name": "ICCM Tools", "description": "ICCM tooling and automation queue." }
+  ],
+  "notes": {
+    "max_length": 5000,
+    "defaults": {
+      "show_to_requester": false,
+      "mark_first_response": false,
+      "add_to_linked_requests": false
+    },
+    "allowed": {
+      "show_to_requester": true,
+      "add_to_linked_requests": true
+    }
+  }
+}
+```
+
+`groups` may also use the shorthand `["ICCM Tools", "Network Ops"]`. An empty
+or absent `groups` list means group names are not restricted — fine for a local
+stdio experiment, not for a deployment.
+
+`defaults` are what applies when the model says nothing; `allowed` is a hard
+gate an operator can close. The two that matter are `show_to_requester`, which
+publishes the note to the customer, and `add_to_linked_requests`, which copies
+it onto every linked ticket — both default to **off**, so reaching anyone
+outside the ticket is always a deliberate argument rather than an inherited
+default.
+
+### Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ITSM_URL` | — | **Required.** e.g. `https://10.10.146.120` |
+| `ITSM_AUTHTOKEN` | — | **Required.** ServiceDesk Plus technician authtoken |
+| `ITSM_PORTAL_ID` | `1` | Sent as the `PORTALID` header |
+| `ITSM_CONFIG` | `./itsm.json` | Write policy. Explicitly set but missing → startup error |
+| `ITSM_VERIFY_SSL` | `true` | See the TLS note below |
+| `ITSM_TIMEOUT_SECONDS` | `30` | Per-request timeout |
+| `ITSM_TRUST_ENV` | `false` | `true` honours `HTTP(S)_PROXY` |
+
+**TLS.** An instance addressed by IP (`https://10.10.146.120`) normally presents
+a cert that fails hostname verification. Prefer exporting `SSL_CERT_FILE`
+pointing at your internal CA over setting `ITSM_VERIFY_SSL=false` — the
+authtoken is a bearer credential and travels on every request.
+
+### Behaviour worth knowing
+
+- The v3 API reports rejected field values **inside an HTTP 200**, in a
+  `response_status` envelope. That is checked, so a 200 with `status: failed`
+  comes back as an error rather than a false success.
+- Redirects are not followed: the authtoken is a header on every request and a
+  followed redirect would hand it to whatever host the redirect names.
+- Notes are stored as HTML by ServiceDesk Plus — prefer plain text.
+- Ticket subjects and statuses echoed back were written by requesters and
+  technicians. They are untrusted data, not instructions.
+
+### Register it
+
+```json
+{
+  "mcpServers": {
+    "itsm": {
+      "command": "/path/to/jenkins-job-mcp/.venv/bin/itsm-mcp",
+      "env": {
+        "ITSM_URL": "https://10.10.146.120",
+        "ITSM_AUTHTOKEN": "…",
+        "ITSM_CONFIG": "/path/to/jenkins-job-mcp/itsm.json"
+      }
+    }
+  }
+}
+```
+
+Over HTTP it takes the same `MCP_TRANSPORT` / `MCP_HOST` / `MCP_PORT` /
+`MCP_PATH` switches as the Jenkins server, with the same warning: no
+authentication of its own, so keep it behind an authenticating proxy.
+
+```bash
+MCP_TRANSPORT=streamable-http MCP_PORT=8001 .venv/bin/itsm-mcp
+```
+
+### Try it
+
+`examples/itsm_client_example.py` spawns the server over stdio itself and calls
+the read-only `list_itsm_groups`, so it exercises config loading and the policy
+without touching a ticket:
+
+```bash
+.venv/bin/python examples/itsm_client_example.py
+```
+
+Against a server already listening over HTTP, and then for a real write:
+
+```bash
+.venv/bin/python examples/itsm_client_example.py --url http://127.0.0.1:8001/mcp
+```
+
+```bash
+.venv/bin/python examples/itsm_client_example.py --update --ticket 2977634 --group "ICCM Tools" --note "Reassigning for triage"
+```
+
+`--update` modifies the live ticket immediately. The visibility flags
+(`--show-to-requester`, `--mark-first-response`, `--add-to-linked-requests`)
+are omitted unless passed, so the server's configured defaults apply.
+
+### Deploying it
+
+See [Deploying itsm-mcp](#deploying-itsm-mcp) — same image as the Jenkins
+server, its own chart at [`charts/itsm-mcp`](charts/itsm-mcp/README.md).
+
 ## Setup
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e .
 ```
+
+This installs both entry points, `jenkins-mcp` and `itsm-mcp`.
 
 Run the tests:
 

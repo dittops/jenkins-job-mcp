@@ -8,7 +8,9 @@ every response is status-checked.
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -42,14 +44,127 @@ def redact(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
+# A mapping big enough to be pathological is not a job result; refuse to parse it.
+_MAX_LITERAL_CHARS = 200_000
+
+# Matches a quoted string at the start of a value, honouring backslash escapes.
+_QUOTED_VALUE = re.compile(r"""^(['"])(?:\\.|(?!\1).)*\1""", re.DOTALL)
+
+
+def _marker_key(marker: str) -> str | None:
+    """The marker's bare name, when it has the ``name:`` shape.
+
+    Returns None for markers that are not name/colon pairs (``>>> RESULT``),
+    which are only ever matched literally.
+    """
+    stripped = marker.strip()
+    if not stripped.endswith(":"):
+        return None
+    return stripped[:-1].strip().strip("\"'") or None
+
+
+def _marker_pattern(marker: str) -> re.Pattern[str]:
+    """Match the marker whether the job printed it bare or as a mapping key.
+
+    A job that prints a dict — ``{'job_output': "RedHat-8"}`` — puts a quote
+    between the name and the colon, so the literal marker never matches. Both
+    quote styles are optional so ``job_output: 17.9.4a`` still matches too.
+    """
+    key = _marker_key(marker)
+    if key is None:
+        return re.compile(re.escape(marker), re.IGNORECASE)
+    return re.compile(rf"""['"]?{re.escape(key)}['"]?\s*:""", re.IGNORECASE)
+
+
+def _enclosing_mapping(console: str, index: int) -> str | None:
+    """The ``{...}`` literal containing `index`, if the marker sits inside one.
+
+    Scans forward from the nearest preceding brace tracking depth, ignoring
+    braces inside quoted strings so a value like ``"{unclosed"`` cannot throw
+    the balance off.
+    """
+    start = console.rfind("{", 0, index)
+    if start == -1 or index - start > _MAX_LITERAL_CHARS:
+        return None
+
+    depth = 0
+    quote: str | None = None
+    i = start
+    while i < len(console):
+        char = console[i]
+        if quote:
+            if char == "\\":
+                i += 2
+                continue
+            if char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                # A literal that closes before the marker does not contain it.
+                return console[start : i + 1] if i > index else None
+        if i - start > _MAX_LITERAL_CHARS:
+            return None
+        i += 1
+    return None
+
+
+def _value_from_mapping(blob: str, key: str) -> str | None:
+    """Pull `key` out of a printed mapping, trying Python then JSON syntax.
+
+    ``literal_eval`` first because jobs print Python dicts (single quotes,
+    ``True``/``None``) far more often than strict JSON; both are literal-only,
+    so nothing in the console is executed.
+    """
+    for parse in (ast.literal_eval, json.loads):
+        try:
+            data = parse(blob)
+        except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for name, value in data.items():
+            if not isinstance(name, str) or name.strip().lower() != key.lower():
+                continue
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value.strip() or None
+            # Nested structures go back out as JSON so the caller can re-parse.
+            if isinstance(value, (dict, list)):
+                return json.dumps(value)
+            return str(value)
+    return None
+
+
+def _unquote(value: str) -> str:
+    """Strip the quotes off a value the job printed quoted, escapes and all."""
+    match = _QUOTED_VALUE.match(value)
+    if not match:
+        return value
+    try:
+        unquoted = ast.literal_eval(match.group(0))
+    except (ValueError, SyntaxError):
+        return value
+    return unquoted if isinstance(unquoted, str) else value
+
+
 def extract_output(console: str, marker: str, multiline: bool = False) -> str | None:
     """Return the job's declared result.
 
-    Jobs print ``job_output: <result>``. The result is the rest of that line —
-    a Jenkins console interleaves plenty of its own epilogue (``Build step ...
-    marked build as``, ``Archiving artifacts``, ``[Pipeline] // stage``) between
-    the job's output and ``Finished:``, so consuming past the newline would
-    capture that noise.
+    Jobs print their result one of two ways:
+
+    * as a bare marker line — ``job_output: 17.9.4a`` — where the result is the
+      rest of that line. A Jenkins console interleaves plenty of its own
+      epilogue (``Build step ... marked build as``, ``Archiving artifacts``,
+      ``[Pipeline] // stage``) between the job's output and ``Finished:``, so
+      consuming past the newline would capture that noise.
+    * as a printed mapping — ``{'job_output': "RedHat-8"}`` — where the result
+      is that key's value, unwrapped from the dict and its quotes.
 
     If the marker appears more than once the last occurrence wins, since a rerun
     inside one build should report its final answer.
@@ -57,20 +172,33 @@ def extract_output(console: str, marker: str, multiline: bool = False) -> str | 
     ``multiline`` (registry opt-in) extends capture past the first newline for
     jobs that emit block output such as pretty-printed JSON. It stops at a blank
     line, at a line that looks like Jenkins' own output, or at the next marker.
+    It does not apply to the mapping form, which is already self-delimiting.
     """
     if not console or not marker:
         return None
 
-    pattern = re.compile(re.escape(marker), re.IGNORECASE)
+    pattern = _marker_pattern(marker)
     matches = list(pattern.finditer(console))
     if not matches:
         return None
 
-    tail = console[matches[-1].end():]
+    last = matches[-1]
+
+    key = _marker_key(marker)
+    if key is not None:
+        blob = _enclosing_mapping(console, last.start())
+        if blob is not None:
+            value = _value_from_mapping(blob, key)
+            if value is not None:
+                return value
+
+    tail = console[last.end():]
     first, _, rest = tail.partition("\n")
 
     if not multiline:
-        return first.strip() or None
+        # A mapping we could not parse (truncated console, say) still leaves a
+        # quoted value behind — return that rather than the raw `"x"}` fragment.
+        return _unquote(first.strip()) or None
 
     lines = [first]
     for line in rest.splitlines():

@@ -1,0 +1,11 @@
+{{- if not .Values.existingPolicyConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "itsm-mcp.policyConfigMapName" . }}
+  labels:
+    {{- include "itsm-mcp.labels" . | nindent 4 }}
+data:
+  itsm.json: |
+    {{- include "itsm-mcp.policyJson" . | nindent 4 }}
+{{- end }}

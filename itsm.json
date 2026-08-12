@@ -1,0 +1,20 @@
+{
+  "groups": [
+    {
+      "name": "ICCM Tools",
+      "description": "ICCM tooling and automation queue."
+    }
+  ],
+  "notes": {
+    "max_length": 5000,
+    "defaults": {
+      "show_to_requester": false,
+      "mark_first_response": false,
+      "add_to_linked_requests": false
+    },
+    "allowed": {
+      "show_to_requester": true,
+      "add_to_linked_requests": true
+    }
+  }
+}
