@@ -96,11 +96,9 @@ async def run(args: argparse.Namespace) -> int:
             return 1
 
         print(f"  itsm: {policy['itsm_url']}")
-        if policy["groups_restricted"]:
-            for group in policy["groups"]:
-                print(f"\n  - {group['name']}: {group['description']}")
-        else:
-            print("\n  (no group allowlist configured — any group name is accepted)")
+        for group in policy["groups"]:
+            print(f"\n  - {group['name']}: {group['description']}")
+        print("\n  (any group name is accepted; ITSM validates it)")
 
         notes = policy["note_policy"]
         print(f"\n  note defaults : {notes['defaults']}")
@@ -167,24 +165,27 @@ def main() -> int:
     parser.add_argument("--ticket", type=int, help="Request id to update.")
     parser.add_argument("--group", help="Group to assign, e.g. 'ICCM Tools'.")
     parser.add_argument("--note", help="Note text to append.")
-    # store_true would send False rather than omitting, which would override
-    # the server's configured default instead of inheriting it.
+    # BooleanOptionalAction gives each flag a --no- counterpart and leaves the
+    # default at None, so an unpassed flag is omitted from the call and the
+    # server's configured default applies. Both directions matter: the stock
+    # policy publishes to the requester, so --no-show-to-requester is how you
+    # post an internal note.
     parser.add_argument(
         "--show-to-requester",
-        action="store_const",
-        const=True,
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Publish the note to the requester (default: server policy).",
     )
     parser.add_argument(
         "--mark-first-response",
-        action="store_const",
-        const=True,
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Mark the note as the first response (default: server policy).",
     )
     parser.add_argument(
         "--add-to-linked-requests",
-        action="store_const",
-        const=True,
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Copy the note onto linked tickets (default: server policy).",
     )
     args = parser.parse_args()

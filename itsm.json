@@ -3,14 +3,18 @@
     {
       "name": "ICCM Tools",
       "description": "ICCM tooling and automation queue."
+    },
+    {
+      "name": "ICCM Database",
+      "description": "ICCM database queue."
     }
   ],
   "notes": {
     "max_length": 5000,
     "defaults": {
-      "show_to_requester": false,
+      "show_to_requester": true,
       "mark_first_response": false,
-      "add_to_linked_requests": false
+      "add_to_linked_requests": true
     },
     "allowed": {
       "show_to_requester": true,

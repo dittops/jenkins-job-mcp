@@ -5,7 +5,7 @@
 image:
   repository: dittops/itsm-mcp
   # Defaults to .Chart.AppVersion. Pin an immutable tag in production.
-  tag: "0.1.0"
+  tag: "0.1.2"
   pullPolicy: IfNotPresent
   # Empty means "use the image's own ENTRYPOINT", which is what you want.
   # Only set this to run a different entry point out of the same image.
@@ -130,25 +130,29 @@ itsm:
 ########################################################################
 # WRITE POLICY (rendered to itsm.json in a ConfigMap)
 ########################################################################
-# This is also the allowlist: a group that is not listed here cannot be
-# assigned. Adding one is a values edit plus `helm upgrade` — no rebuild.
-#
-# An empty `groups` list means group names are NOT restricted. That is fine for
-# a local experiment and a bad idea in a cluster.
+# `groups` is a hint, NOT an allowlist: any group name is accepted and ITSM
+# decides whether it exists. Listing one here gives the model something to
+# discover and fixes its spelling — a caller saying "iccm tools" assigns
+# "ICCM Tools". Leaving the list empty is fine; nothing is restricted either way.
 policy:
   groups:
     - name: ICCM Tools
       description: ICCM tooling and automation queue.
+    - name: ICCM Database
+      description: ICCM database queue.
   notes:
     max_length: 5000
-    # What applies when the caller says nothing. Both of the flags that reach
-    # beyond the single ticket are off here on purpose.
+    # What applies when the caller says nothing. A note is customer-visible and
+    # propagates to linked tickets by default; a caller makes one internal-only
+    # by passing show_to_requester=false explicitly.
     defaults:
-      show_to_requester: false
+      show_to_requester: true
       mark_first_response: false
-      add_to_linked_requests: false
-    # Hard gates. Set show_to_requester: false to make it impossible for this
-    # server to publish a note to the requester, whatever the model asks for.
+      add_to_linked_requests: true
+    # Hard gates, independent of the defaults above. Set show_to_requester to
+    # false to make it impossible for this server to publish a note to the
+    # requester, whatever the model asks for — then also set the matching
+    # default to false, or the chart will refuse to render.
     allowed:
       show_to_requester: true
       add_to_linked_requests: true

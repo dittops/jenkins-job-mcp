@@ -6,8 +6,11 @@ requester, technician, whatever. This server therefore never forwards a
 caller-supplied blob: ``client.build_update_payload`` assembles ``input_data``
 itself from typed arguments, and this module is what bounds those arguments.
 
-The ``groups`` list is the allowlist, mirroring how the Jenkins server's action
-registry works: a group that is not listed cannot be assigned.
+``groups`` is *not* an allowlist. Any group name is accepted and forwarded:
+ITSM is the authority on which groups exist, and keeping a second list here
+only produced a staler copy that rejected valid groups. The list survives as
+canonical spellings, so a name that matches one is sent the way it is written
+here.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .errors import ConfigError, ParameterError, UnknownGroupError
+from .errors import ConfigError, ParameterError
 
 DEFAULT_PORTAL_ID = "1"
 
@@ -45,7 +48,7 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class GroupConfig:
-    """One support group a ticket may be assigned to."""
+    """One support group, as a hint to the caller and a canonical spelling."""
 
     name: str
     description: str = ""
@@ -55,17 +58,22 @@ class GroupConfig:
 class NotePolicy:
     """Bounds on the note this server may append to a ticket.
 
-    The two ``allow_*`` switches gate the flags whose blast radius reaches
-    beyond the one ticket: ``show_to_requester`` publishes the note to the
-    customer, and ``add_to_linked_requests`` copies it onto every linked
-    ticket. Both default to permitted but *off*, so reaching a customer is
-    always a deliberate argument rather than a default the model inherits.
+    ``show_to_requester`` publishes the note to the customer and
+    ``add_to_linked_requests`` copies it onto every linked ticket. Both are on
+    by default, matching how this deployment's technicians write notes: the
+    normal case is a customer-visible update that propagates across the linked
+    set, and an internal-only note is the exception a caller asks for with
+    ``show_to_requester=false``.
+
+    The two ``allow_*`` switches are the hard gates, independent of the
+    defaults: setting one false makes that flag unreachable no matter what a
+    caller passes.
     """
 
     max_length: int = DEFAULT_MAX_NOTE_LENGTH
-    default_show_to_requester: bool = False
+    default_show_to_requester: bool = True
     default_mark_first_response: bool = False
-    default_add_to_linked_requests: bool = False
+    default_add_to_linked_requests: bool = True
     allow_show_to_requester: bool = True
     allow_add_to_linked_requests: bool = True
 
@@ -77,34 +85,23 @@ class Policy:
     groups: tuple[GroupConfig, ...] = ()
     notes: NotePolicy = field(default_factory=NotePolicy)
 
-    @property
-    def restricts_groups(self) -> bool:
-        return bool(self.groups)
-
     def group(self, name: str) -> GroupConfig:
-        """Resolve a group name to its configured entry.
+        """Resolve a group name, canonicalising it against the configured list.
 
-        Matching is case-insensitive and the *configured* spelling is what gets
-        sent, so a model that says "iccm tools" still assigns "ICCM Tools". An
-        empty allowlist means the policy does not restrict groups, and the name
-        passes through as supplied.
+        Not a gate: any non-empty name is accepted and forwarded to ITSM, which
+        is the authority on which groups exist and will reject one that does
+        not. Matching is case-insensitive and a hit is sent in its *configured*
+        spelling, so "iccm tools" assigns "ICCM Tools"; anything else is sent
+        exactly as supplied.
         """
         wanted = (name or "").strip()
         if not wanted:
             raise ParameterError("group must be a non-empty group name.")
 
-        if not self.groups:
-            return GroupConfig(name=wanted)
-
         for group in self.groups:
             if group.name.lower() == wanted.lower():
                 return group
-
-        known = ", ".join(g.name for g in self.groups)
-        raise UnknownGroupError(
-            f"Group '{wanted}' is not allowed. Configured groups: {known}. "
-            f"Add it to the ITSM policy file if this assignment is intended."
-        )
+        return GroupConfig(name=wanted)
 
     def validate_note(self, note: str) -> str:
         text = (note or "").strip()
@@ -161,7 +158,6 @@ class Policy:
             "groups": [
                 {"name": g.name, "description": g.description} for g in self.groups
             ],
-            "groups_restricted": self.restricts_groups,
             "note_policy": {
                 "max_length": self.notes.max_length,
                 "defaults": {
@@ -220,7 +216,7 @@ def _parse_groups(raw: object) -> tuple[GroupConfig, ...]:
 
         if not entry.name.strip():
             raise ConfigError("group names cannot be empty")
-        # A duplicate would make the allowlist ambiguous about which spelling wins.
+        # A duplicate would make it ambiguous which spelling is canonical.
         if entry.name.lower() in seen:
             raise ConfigError(f"group '{entry.name}' is listed more than once")
         seen.add(entry.name.lower())
@@ -247,19 +243,45 @@ def _parse_notes(raw: object) -> NotePolicy:
     if max_length < 1:
         raise ConfigError("'notes.max_length' must be at least 1")
 
-    def flag(source: dict, key: str, default: bool) -> bool:
+    def flag(source: dict, block: str, key: str, default: bool) -> bool:
         value = source.get(key, default)
         if not isinstance(value, bool):
-            raise ConfigError(f"'{key}' must be true or false, got {value!r}")
+            raise ConfigError(
+                f"'notes.{block}.{key}' must be true or false, got {value!r}"
+            )
         return value
+
+    def gated(key: str, fallback: bool) -> tuple[bool, bool]:
+        """Resolve one flag's (default, allowed) pair.
+
+        The default falls back to whatever is *allowed* rather than to a fixed
+        value, so closing a gate without touching `defaults` turns the flag off
+        instead of leaving a default the gate then rejects on every call.
+        Spelling out both, contradictorily, is a config error rather than a
+        server that fails every note it is asked to write.
+        """
+        permitted = flag(allowed, "allowed", key, fallback)
+        applied = flag(defaults, "defaults", key, permitted)
+        if applied and not permitted:
+            raise ConfigError(
+                f"'notes.defaults.{key}' is true but 'notes.allowed.{key}' is "
+                f"false, so every note would be rejected. Set the default to "
+                f"false, or open the gate."
+            )
+        return applied, permitted
+
+    show_default, show_allowed = gated("show_to_requester", True)
+    linked_default, linked_allowed = gated("add_to_linked_requests", True)
 
     return NotePolicy(
         max_length=max_length,
-        default_show_to_requester=flag(defaults, "show_to_requester", False),
-        default_mark_first_response=flag(defaults, "mark_first_response", False),
-        default_add_to_linked_requests=flag(defaults, "add_to_linked_requests", False),
-        allow_show_to_requester=flag(allowed, "show_to_requester", True),
-        allow_add_to_linked_requests=flag(allowed, "add_to_linked_requests", True),
+        default_show_to_requester=show_default,
+        default_mark_first_response=flag(
+            defaults, "defaults", "mark_first_response", False
+        ),
+        default_add_to_linked_requests=linked_default,
+        allow_show_to_requester=show_allowed,
+        allow_add_to_linked_requests=linked_allowed,
     )
 
 

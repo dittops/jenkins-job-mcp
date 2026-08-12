@@ -18,26 +18,27 @@ ITSM instance: {{ .Values.itsm.url }} (portal {{ .Values.itsm.portalId }})
 Write policy: from ConfigMap {{ .Values.existingPolicyConfigMap }}
 {{- else if .Values.policy.groups }}
 {{- /* groups accept both the object form and the bare-string shorthand */}}
-Groups assignable ({{ len .Values.policy.groups }}): {{ range $i, $g := .Values.policy.groups }}{{ if $i }}, {{ end }}{{ if kindIs "string" $g }}{{ $g }}{{ else }}{{ $g.name }}{{ end }}{{ end }}
+Groups suggested ({{ len .Values.policy.groups }}): {{ range $i, $g := .Values.policy.groups }}{{ if $i }}, {{ end }}{{ if kindIs "string" $g }}{{ $g }}{{ else }}{{ $g.name }}{{ end }}{{ end }}
+  (a hint only — any group name is accepted, and ITSM validates it)
 {{- else }}
-Groups assignable: unrestricted
+Groups suggested: none listed; any group name is accepted
 {{- end }}
 
 SECURITY: this server has no authentication, and it WRITES to your ticketing
 system. Anyone who can reach that URL can reassign tickets and post notes on
 them under the authtoken's technician account.
 {{- if not .Values.existingPolicyConfigMap }}
-{{- if not .Values.policy.groups }}
-
-  !! policy.groups is empty, so ANY group name may be assigned. Populate it —
-     the list is the allowlist.
-{{- end }}
 {{- with .Values.policy.notes }}
-{{- if and .defaults .defaults.show_to_requester }}
+{{- if .defaults }}
 
-  !! policy.notes.defaults.show_to_requester=true — every note this server
-     writes is published to the requester by default. Set it to false and let
-     callers opt in per note.
+  Note defaults, applied whenever a caller does not say otherwise:
+    visible to requester   : {{ .defaults.show_to_requester }}
+    copied to linked tickets: {{ .defaults.add_to_linked_requests }}
+    marks first response   : {{ .defaults.mark_first_response }}
+{{- if .defaults.show_to_requester }}
+  A note therefore reaches the customer unless the caller passes
+  show_to_requester=false.
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}
