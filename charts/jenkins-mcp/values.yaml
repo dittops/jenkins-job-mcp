@@ -137,7 +137,7 @@ jenkins:
 # This is also the allowlist: an action that is not listed here cannot be
 # triggered. Adding one is a values edit plus `helm upgrade` — no rebuild.
 actions:
-  job: AUTOMATION_Trigger_Workflow
+  job: ICCM_AUTO_AI_Trigger_Workflow
   description: Automation workflow. Every action runs this same Jenkins job with a different action_name.
   output_marker: "job_output:"
   # Set true for jobs printing block output (JSON, tables) after the marker.
@@ -161,10 +161,10 @@ actions:
   actions:
     fetchos:
       description: Fetch the operating system version running on the device.
-    fetchtop:
-      description: Fetch the top process / resource usage snapshot from the device.
-    fetchcpu:
-      description: Fetch current CPU utilisation for the device.
+    rhel_7_to_9_perf:
+      description: Fetch CPU, Memory and Disk utilisation for RHEL 7 to 9 devices.
+    aix_perf:
+      description: Fetch CPU, Memory and Disk utilisation for AIX devices.
 
 # Use a ConfigMap you manage yourself instead of the `actions` block above.
 # It must contain an "actions.json" key.
