@@ -118,6 +118,75 @@ def test_extract_json_payload():
     assert json.loads(extract_output(console, "job_output:")) == {"cpu": 42, "load": "0.7"}
 
 
+def test_extract_from_printed_python_dict():
+    """The job prints a dict repr, so the marker is quoted: {'job_output': "x"}."""
+    console = 'noise\n{\'job_output\': "RedHat-8"}\nFinished: SUCCESS'
+    assert extract_output(console, "job_output:") == "RedHat-8"
+
+
+def test_extract_from_printed_dict_ignores_text_around_it():
+    """Log prefixes and trailing text on the marker's line are not the result."""
+    console = (
+        "2026-08-05 12:00:01 INFO  {'job_output': \"RedHat-8\"} took 3.2s\n"
+        "Finished: SUCCESS"
+    )
+    assert extract_output(console, "job_output:") == "RedHat-8"
+
+
+def test_extract_from_printed_dict_with_other_keys():
+    console = "{'status': 'ok', 'job_output': 'RedHat-8', 'elapsed': 3.2}\nFinished: SUCCESS"
+    assert extract_output(console, "job_output:") == "RedHat-8"
+
+
+def test_extract_from_json_dict():
+    console = 'Some log\n{"job_output": "RedHat-8"}\nBuild step marked build as SUCCESS'
+    assert extract_output(console, "job_output:") == "RedHat-8"
+
+
+def test_extract_from_nested_dict_value_stays_json():
+    console = "{'job_output': {'cpu': 42, 'load': '0.7'}} trailing\nFinished: SUCCESS"
+    assert json.loads(extract_output(console, "job_output:")) == {"cpu": 42, "load": "0.7"}
+
+
+def test_extract_dict_value_containing_braces_and_quotes():
+    console = """{'job_output': "RedHat-8 {not a dict}"} done\nFinished: SUCCESS"""
+    assert extract_output(console, "job_output:") == "RedHat-8 {not a dict}"
+
+
+def test_extract_pretty_printed_dict_spans_lines_without_the_multiline_flag():
+    console = (
+        "Started by user jenkins-user\n"
+        "{\n  'job_output': 'RedHat-8',\n  'elapsed': 3.2\n}\n"
+        "Finished: SUCCESS"
+    )
+    assert extract_output(console, "job_output:") == "RedHat-8"
+
+
+def test_extract_last_dict_wins():
+    console = "{'job_output': 'first'}\nretrying\n{'job_output': 'second'}\nFinished: SUCCESS"
+    assert extract_output(console, "job_output:") == "second"
+
+
+def test_extract_ignores_earlier_unrelated_dict():
+    """A stray literal before the marker must not swallow a bare marker line."""
+    console = '{"unrelated": 1}\njob_output: 17.9.4a\nFinished: SUCCESS'
+    assert extract_output(console, "job_output:") == "17.9.4a"
+
+
+def test_extract_unparseable_dict_falls_back_to_the_line():
+    """A truncated console still yields the value, not a `"x"}` fragment."""
+    console = "{'job_output': \"RedHat-8\", 'trunc\nFinished: SUCCESS"
+    assert extract_output(console, "job_output:") == "RedHat-8"
+
+
+def test_extract_bare_quoted_value_is_unwrapped():
+    assert extract_output('job_output: "RedHat-8"\nFinished: SUCCESS', "job_output:") == "RedHat-8"
+
+
+def test_extract_non_colon_marker_still_matches_literally():
+    assert extract_output(">>> RESULT ok\nFinished: SUCCESS", ">>> RESULT") == "ok"
+
+
 def test_tail_lines():
     assert tail_lines("a\nb\nc\nd", 2) == "c\nd"
     assert tail_lines("a\nb", 10) == "a\nb"
