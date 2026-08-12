@@ -1,0 +1,12 @@
+apiVersion: v2
+name: itsm-mcp
+description: MCP server that updates ITSM tickets — assigns a group and appends a note
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - mcp
+  - itsm
+  - servicedesk
+sources:
+  - https://github.com/dittops/jenkins-job-mcp

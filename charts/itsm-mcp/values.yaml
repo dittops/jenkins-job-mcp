@@ -1,0 +1,203 @@
+########################################################################
+# IMAGE
+########################################################################
+# Built from Dockerfile.itsm; its ENTRYPOINT is already `itsm-mcp`.
+image:
+  repository: dittops/itsm-mcp
+  # Defaults to .Chart.AppVersion. Pin an immutable tag in production.
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+  # Empty means "use the image's own ENTRYPOINT", which is what you want.
+  # Only set this to run a different entry point out of the same image.
+  command: []
+
+imagePullSecrets: []            # e.g. ["regcred"] for a private registry
+nameOverride: ""
+fullnameOverride: ""
+
+########################################################################
+# WORKLOAD
+########################################################################
+# Keep this at 1 unless the clients in front of you hold a stable connection
+# to one pod. streamable-http sessions live in the memory of the pod that
+# created them, so a second replica will 404 requests that land on the wrong
+# one. If you do scale up, also set service.sessionAffinity: ClientIP (and an
+# ingress affinity annotation, if traffic arrives through one).
+replicaCount: 1
+
+# Shorter than the Jenkins chart's: an ITSM call is a single bounded PUT, not
+# a poll loop waiting on a build, so a draining pod has little to finish.
+terminationGracePeriodSeconds: 30
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true  # /tmp is supplied as an emptyDir
+  capabilities:
+    drop: ["ALL"]
+
+# The MCP endpoint rejects a bare GET (it wants MCP session/Accept headers), so
+# a TCP connect is the meaningful liveness signal.
+probes:
+  liveness:
+    enabled: true
+    initialDelaySeconds: 10
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+########################################################################
+# SERVICE
+########################################################################
+service:
+  type: ClusterIP
+  port: 8000
+  annotations: {}
+  # Set to ClientIP if you ever run replicaCount > 1 (see the note above).
+  sessionAffinity: ""
+
+########################################################################
+# MCP TRANSPORT
+########################################################################
+mcp:
+  transport: streamable-http    # streamable-http | sse
+  host: 0.0.0.0                 # must be 0.0.0.0 in a pod to be reachable
+  port: 8000                    # container port
+  path: /mcp                    # clients connect to http://<host>:<port><path>
+
+########################################################################
+# ITSM CONNECTION
+########################################################################
+itsm:
+  url: ""                       # required, e.g. https://10.10.146.120
+  portalId: "1"                 # sent as the PORTALID header
+  verifySsl: true               # see the TLS note below
+  trustEnv: false               # true honours HTTP(S)_PROXY env vars
+  timeoutSeconds: 30
+
+  auth:
+    # Recommended: reference a Secret you manage out of band (sealed-secrets,
+    # external-secrets, vault). When set, nothing sensitive lives in values.
+    existingSecret: ""
+
+    # Key name inside the Secret — chart-managed or existing.
+    authtokenKey: ITSM_AUTHTOKEN
+
+    # Used only when existingSecret is empty — the chart then renders a Secret
+    # from this. Pass it with --set / a private values file, never in git.
+    authtoken: ""
+
+# An instance addressed by IP normally presents a cert that fails hostname
+# verification. Prefer mounting your internal CA (extraVolumes below) and
+# pointing SSL_CERT_FILE at it via extraEnv over setting verifySsl: false —
+# the authtoken is a bearer credential sent on every request.
+
+########################################################################
+# WRITE POLICY (rendered to itsm.json in a ConfigMap)
+########################################################################
+# This is also the allowlist: a group that is not listed here cannot be
+# assigned. Adding one is a values edit plus `helm upgrade` — no rebuild.
+#
+# An empty `groups` list means group names are NOT restricted. That is fine for
+# a local experiment and a bad idea in a cluster.
+policy:
+  groups:
+    - name: ICCM Tools
+      description: ICCM tooling and automation queue.
+  notes:
+    max_length: 5000
+    # What applies when the caller says nothing. Both of the flags that reach
+    # beyond the single ticket are off here on purpose.
+    defaults:
+      show_to_requester: false
+      mark_first_response: false
+      add_to_linked_requests: false
+    # Hard gates. Set show_to_requester: false to make it impossible for this
+    # server to publish a note to the requester, whatever the model asks for.
+    allowed:
+      show_to_requester: true
+      add_to_linked_requests: true
+
+# Use a ConfigMap you manage yourself instead of the `policy` block above.
+# It must contain an "itsm.json" key.
+existingPolicyConfigMap: ""
+
+########################################################################
+# INGRESS
+########################################################################
+# Off by default, and it should stay off unless the ingress in front of it
+# authenticates. This server has no auth of its own: anyone who reaches the URL
+# can reassign and comment on your tickets. Terminate TLS and require auth at
+# the proxy (oauth2-proxy, an auth-url annotation, mTLS).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: itsm-mcp.example.com
+      paths:
+        - path: /mcp
+          pathType: Prefix
+  tls: []
+
+########################################################################
+# NETWORK POLICY
+########################################################################
+# Recommended when the cluster supports it: restricts who may reach the
+# unauthenticated MCP port. With `from` empty, all ingress to the pod is denied.
+networkPolicy:
+  enabled: false
+  from: []
+  # from:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: agents
+  #     podSelector:
+  #       matchLabels:
+  #         app.kubernetes.io/name: my-agent
+
+########################################################################
+# EXTRAS
+########################################################################
+extraEnv: []                    # [{name: SSL_CERT_FILE, value: /certs/ca.pem}]
+extraEnvFrom: []                # [{secretRef: {name: extra-secrets}}]
+
+# Mount your internal CA here, then point SSL_CERT_FILE at it via extraEnv
+# rather than turning verifySsl off.
+extraVolumes: []
+extraVolumeMounts: []

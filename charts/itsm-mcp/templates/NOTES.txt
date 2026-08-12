@@ -1,0 +1,70 @@
+{{ include "itsm-mcp.fullname" . }} is deployed.
+
+In-cluster URL for MCP clients:
+
+  http://{{ include "itsm-mcp.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}{{ .Values.mcp.path }}
+
+Try it from your machine:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "itsm-mcp.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  python examples/itsm_client_example.py --url http://127.0.0.1:{{ .Values.service.port }}{{ .Values.mcp.path }}
+
+Client config:
+
+  {"mcpServers": {"itsm": {"type": "http", "url": "http://<host>:{{ .Values.service.port }}{{ .Values.mcp.path }}"}}}
+
+ITSM instance: {{ .Values.itsm.url }} (portal {{ .Values.itsm.portalId }})
+{{- if .Values.existingPolicyConfigMap }}
+Write policy: from ConfigMap {{ .Values.existingPolicyConfigMap }}
+{{- else if .Values.policy.groups }}
+{{- /* groups accept both the object form and the bare-string shorthand */}}
+Groups assignable ({{ len .Values.policy.groups }}): {{ range $i, $g := .Values.policy.groups }}{{ if $i }}, {{ end }}{{ if kindIs "string" $g }}{{ $g }}{{ else }}{{ $g.name }}{{ end }}{{ end }}
+{{- else }}
+Groups assignable: unrestricted
+{{- end }}
+
+SECURITY: this server has no authentication, and it WRITES to your ticketing
+system. Anyone who can reach that URL can reassign tickets and post notes on
+them under the authtoken's technician account.
+{{- if not .Values.existingPolicyConfigMap }}
+{{- if not .Values.policy.groups }}
+
+  !! policy.groups is empty, so ANY group name may be assigned. Populate it —
+     the list is the allowlist.
+{{- end }}
+{{- with .Values.policy.notes }}
+{{- if and .defaults .defaults.show_to_requester }}
+
+  !! policy.notes.defaults.show_to_requester=true — every note this server
+     writes is published to the requester by default. Set it to false and let
+     callers opt in per note.
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if not .Values.itsm.verifySsl }}
+
+  !! itsm.verifySsl=false — the authtoken is sent on every request over a
+     connection nothing is authenticating. Mount your internal CA and point
+     SSL_CERT_FILE at it via extraEnv instead.
+{{- end }}
+{{- if .Values.ingress.enabled }}
+
+  !! ingress.enabled=true — the endpoint is published at
+     {{- range .Values.ingress.hosts }} {{ .host }}{{ end }}.
+     Make sure the ingress terminates TLS and authenticates callers
+     (oauth2-proxy, an auth-url annotation, mTLS). Otherwise, disable it and
+     reach the service through port-forward or in-cluster DNS instead.
+{{- end }}
+{{- if not .Values.networkPolicy.enabled }}
+
+  Consider networkPolicy.enabled=true to limit which pods may connect.
+{{- end }}
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- if not .Values.service.sessionAffinity }}
+
+  !! replicaCount={{ .Values.replicaCount }} with no service.sessionAffinity set.
+     MCP streamable-http sessions are held in the memory of the pod that
+     created them, so requests routed to another pod will fail. Set
+     service.sessionAffinity=ClientIP, or go back to a single replica.
+{{- end }}
+{{- end }}
